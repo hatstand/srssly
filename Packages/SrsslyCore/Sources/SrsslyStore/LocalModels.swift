@@ -52,8 +52,6 @@ public final class Article {
 @Model
 public final class FeedFetchState {
     @Attribute(.unique) public var subscriptionID: UUID
-    /// Where the feed actually lives after following redirects.
-    public var resolvedURLString: String?
     public var etag: String?
     public var lastModified: String?
     /// Hash of the last response body, for servers that ignore conditional GET
@@ -63,6 +61,8 @@ public final class FeedFetchState {
     public var lastSuccessAt: Date?
     public var lastError: String?
     public var consecutiveFailures: Int = 0
+    /// Date of the newest item seen, to spot dormant feeds.
+    public var latestItemAt: Date?
 
     public init(subscriptionID: UUID) {
         self.subscriptionID = subscriptionID

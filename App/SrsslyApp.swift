@@ -6,11 +6,23 @@ import SwiftUI
 @main
 @MainActor
 struct SrsslyApp: App {
-    let container: ModelContainer = Self.makeContainer()
+    let container: ModelContainer
+    let refresher: FeedRefresher?
+
+    init() {
+        container = Self.makeContainer()
+        #if DEBUG
+        // Sample data is for previews and UI tests: never touch the network.
+        refresher = SampleData.isRequested ? nil : FeedRefresher(container: container)
+        #else
+        refresher = FeedRefresher(container: container)
+        #endif
+    }
 
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environment(\.feedRefresher, refresher)
         }
         .modelContainer(container)
     }
@@ -33,4 +45,8 @@ struct SrsslyApp: App {
             }
         }
     }
+}
+
+extension EnvironmentValues {
+    @Entry var feedRefresher: FeedRefresher? = nil
 }
