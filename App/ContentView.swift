@@ -18,13 +18,16 @@ struct ContentView: View {
                     ContentUnavailableView(
                         "No Subscriptions",
                         systemImage: "dot.radiowaves.up.forward",
-                        description: Text("Feeds you add will appear here.")
+                        description: Text("Tap + to add a feed or import an OPML file from another reader.")
                     )
                 } else {
                     ArticleTimeline(subscriptions: subscriptions)
                 }
             }
             .navigationTitle("Srssly")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) { AddFeedsButton() }
+            }
         }
         .onAppear { LaunchMetrics.firstContentAppeared() }
         // Refresh after the first frame, and again on returning to the app.
