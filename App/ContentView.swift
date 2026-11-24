@@ -1,18 +1,40 @@
+import SrsslyStore
+import SwiftData
 import SwiftUI
 
 struct ContentView: View {
+    // @Query reads synchronously from the local store, so the first frame
+    // already has content. Nothing here waits on the network.
+    @Query(sort: [SortDescriptor(\Subscription.sortIndex), SortDescriptor(\Subscription.title)])
+    private var subscriptions: [Subscription]
+
     var body: some View {
         NavigationStack {
-            ContentUnavailableView(
-                "No Subscriptions",
-                systemImage: "dot.radiowaves.up.forward",
-                description: Text("Feeds you add will appear here.")
-            )
+            Group {
+                if subscriptions.isEmpty {
+                    ContentUnavailableView(
+                        "No Subscriptions",
+                        systemImage: "dot.radiowaves.up.forward",
+                        description: Text("Feeds you add will appear here.")
+                    )
+                } else {
+                    ArticleTimeline(subscriptions: subscriptions)
+                }
+            }
             .navigationTitle("Srssly")
         }
+        .onAppear { LaunchMetrics.firstContentAppeared() }
     }
 }
 
-#Preview {
+#Preview("Empty") {
     ContentView()
+        .modelContainer(try! SrsslyStore.makeContainer(inMemory: true, cloudKit: false))
 }
+
+#if DEBUG
+#Preview("With articles") {
+    ContentView()
+        .modelContainer(SampleData.container())
+}
+#endif

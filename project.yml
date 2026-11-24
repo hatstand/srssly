@@ -41,8 +41,19 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         TARGETED_DEVICE_FAMILY: "1,2"
+  SrsslyUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [Tests/SrsslyUITests]
+    dependencies:
+      - target: Srssly
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.purplehatstands.srssly.uitests
 schemes:
   Srssly:
     build:
       targets:
         Srssly: all
+    test:
+      targets: [SrsslyUITests]

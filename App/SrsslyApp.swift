@@ -4,6 +4,7 @@ import SwiftData
 import SwiftUI
 
 @main
+@MainActor
 struct SrsslyApp: App {
     let container: ModelContainer = Self.makeContainer()
 
@@ -15,6 +16,9 @@ struct SrsslyApp: App {
     }
 
     private static func makeContainer() -> ModelContainer {
+        #if DEBUG
+        if SampleData.isRequested { return SampleData.container() }
+        #endif
         do {
             return try SrsslyStore.makeContainer()
         } catch {
