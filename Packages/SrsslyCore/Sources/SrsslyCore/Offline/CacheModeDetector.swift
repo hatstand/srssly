@@ -36,7 +36,7 @@ public enum CacheModeDetector {
         let html = item.contentHTML ?? item.summaryHTML ?? ""
         if !HTMLResources.scan(html, baseURL: item.link).images.isEmpty { return true }
         if item.enclosures.contains(where: { $0.mimeType?.hasPrefix("image/") == true }) { return true }
-        return HTMLScanner.visibleTextLength(html) >= fullTextThreshold
+        return HTMLResources.visibleTextLength(html) >= fullTextThreshold
     }
 }
 

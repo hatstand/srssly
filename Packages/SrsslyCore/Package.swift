@@ -12,8 +12,13 @@ let package = Package(
         .library(name: "SrsslyCore", targets: ["SrsslyCore"]),
         .library(name: "SrsslyStore", targets: ["SrsslyStore"]),
     ],
+    dependencies: [
+        // HTML parsing (a port of jsoup). Pinned exactly: Package.resolved
+        // isn't committed, and a parser sees untrusted pages.
+        .package(url: "https://github.com/scinfu/SwiftSoup.git", exact: "2.14.3"),
+    ],
     targets: [
-        .target(name: "SrsslyCore"),
+        .target(name: "SrsslyCore", dependencies: ["SwiftSoup"]),
         .target(name: "SrsslyStore", dependencies: ["SrsslyCore"]),
         .testTarget(name: "SrsslyCoreTests", dependencies: ["SrsslyCore"]),
         .testTarget(name: "SrsslyStoreTests", dependencies: ["SrsslyStore"]),
