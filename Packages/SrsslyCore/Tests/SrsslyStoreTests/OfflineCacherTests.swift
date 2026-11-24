@@ -120,6 +120,38 @@ actor StubResourceFetcher: ResourceFetching {
         #expect(await fetcher.requested() == [URL(string: "https://news.test/a")!])
     }
 
+    @Test func smbcBonusPanelIsFetchedFromThePage() async throws {
+        let sub = try subscription("https://www.smbc-comics.com/comic/rss", detected: .feedContent)
+        let a = try article(sub, "1", link: "https://www.smbc-comics.com/comic/today",
+                            html: #"<img src="https://www.smbc-comics.com/comics/today.png">"#)
+        await fetcher.set("https://www.smbc-comics.com/comic/today", html: """
+        <img title="Hover!" src="/comics/today.png" id="cc-comic">
+        <div id="aftercomic" style="display:none"><img src="/comics/todayafter.png"></div>
+        """)
+        await fetcher.set("https://www.smbc-comics.com/comics/today.png", bytes: 30)
+        await fetcher.set("https://www.smbc-comics.com/comics/todayafter.png", bytes: 20)
+
+        #expect(await makeCacher().run(allowsCellular: false, now: now).cached == 1)
+
+        let saved = try stored(a.key)
+        #expect(saved.offlinePageFile == nil, "feed content is enough; the page is only read for extras")
+        #expect(saved.extraImages.map(\.title) == ["Hover!", nil])
+        #expect(saved.extraImages.last?.url.lastPathComponent == "todayafter.png")
+        #expect(cache.hasResource(URL(string: "https://www.smbc-comics.com/comics/todayafter.png")!))
+        #expect(await fetcher.requested().filter { $0.lastPathComponent == "today.png" }.count == 1, "shared image fetched once")
+    }
+
+    @Test func siteRuleForcesFullPage() async throws {
+        let sub = try subscription("https://theoatmeal.com/feed/rss", detected: .feedContent)
+        let a = try article(sub, "1", link: "https://theoatmeal.com/comics/x", html: #"<img src="https://theoatmeal.com/thumb.png">"#)
+        await fetcher.set("https://theoatmeal.com/comics/x", html: "<p>The whole comic</p>")
+        await fetcher.set("https://theoatmeal.com/thumb.png", bytes: 5)
+
+        await makeCacher().run(allowsCellular: false, now: now)
+
+        #expect(try stored(a.key).offlinePageFile != nil)
+    }
+
     @Test func pageFailuresCountAndEventuallyGiveUp() async throws {
         let sub = try subscription("https://news.test/rss", detected: .fullPage)
         let a = try article(sub, "1", link: "https://news.test/gone")
