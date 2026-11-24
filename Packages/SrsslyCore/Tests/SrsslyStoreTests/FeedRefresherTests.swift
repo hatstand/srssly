@@ -161,3 +161,45 @@ func updated(_ items: [ParsedItem], title: String? = "Feed", etag: String? = "\"
         #expect(try articles().count == 1)
     }
 }
+
+/// Answers one feed straight away and hangs on the rest until cancelled.
+actor SlowFetcher: FeedFetching {
+    let fastURL: URL
+    init(fastURL: URL) { self.fastURL = fastURL }
+
+    func fetch(_ request: FetchRequest) async throws(FetchError) -> FetchResult {
+        if request.url == fastURL {
+            return try updated([ParsedItem(guid: "fast", title: "Fast")]).get()
+        }
+        do {
+            try await Task.sleep(for: .seconds(60))
+        } catch {
+            throw .transport("cancelled")
+        }
+        return try updated([]).get()
+    }
+}
+
+@MainActor
+@Suite struct FeedRefresherCancellationTests {
+    @Test func cancellingKeepsFinishedFeedsAndDoesNotCountFailures() async throws {
+        let container = try SrsslyStore.makeContainer(inMemory: true, cloudKit: false)
+        let fast = URL(string: "https://fast.test/feed")!
+        container.mainContext.insert(Subscription(feedURL: fast, title: "Fast"))
+        container.mainContext.insert(Subscription(feedURL: URL(string: "https://slow.test/feed")!, title: "Slow"))
+        try container.mainContext.save()
+        let refresher = FeedRefresher(container: container, fetcher: SlowFetcher(fastURL: fast))
+
+        let task = Task { await refresher.refresh() }
+        try await Task.sleep(for: .milliseconds(300))
+        task.cancel()
+        let summary = await task.value
+
+        #expect(summary.failed == 0)
+        #expect(summary.newArticles == 1)
+        let context = ModelContext(container)
+        #expect(try context.fetch(FetchDescriptor<Article>()).map(\.title) == ["Fast"])
+        let states = try context.fetch(FetchDescriptor<FeedFetchState>())
+        #expect(states.allSatisfy { $0.consecutiveFailures == 0 })
+    }
+}

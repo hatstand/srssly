@@ -2,10 +2,19 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- CloudKit sends silent pushes when another device changes synced data. -->
 	<key>UIBackgroundModes</key>
 	<array>
+		<!-- CloudKit sends silent pushes when another device changes synced data. -->
 		<string>remote-notification</string>
+		<!-- BGAppRefreshTask: fetch feeds a few times a day. -->
+		<string>fetch</string>
+		<!-- BGProcessingTask: cache pages and images while charging. -->
+		<string>processing</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.purplehatstands.srssly.refresh</string>
+		<string>com.purplehatstands.srssly.cache</string>
 	</array>
 </dict>
 </plist>
