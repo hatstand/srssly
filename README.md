@@ -32,6 +32,8 @@ CI runs the app with `-SrsslySampleData`, which never starts sync. Local builds 
 - **Synced store**: `Subscription` and `ArticleState` (read/starred, only for articles you have touched). `CloudSync` syncs these with `CKSyncEngine` using our own CloudKit record types, so a web client can share them. See [docs/cloudkit-schema.md](docs/cloudkit-schema.md).
 - **Local store** (this device only): `Article` and `FeedFetchState`. Each device fetches feeds itself, so this is a rebuildable cache.
 
+- **Offline cache** (this device only): saved pages, images and stylesheets in Application Support/OfflineCache, excluded from backups. `OfflineCacher` fills it for articles from the last 30 days, newest first. It keeps starred articles and prunes everything else after 30 days or past 1 GB. Each subscription's cache mode decides what's saved: the feed's own content and its images, or the full linked page. `automatic` picks one from the feed with `CacheModeDetector`.
+
 Articles join to their state by `ArticleKey`, derived from the subscription's synced ID and the item's GUID (or link), so it matches across devices.
 
 ## CI
