@@ -16,7 +16,12 @@ make test-core   # run SrsslyCore tests (no simulator needed)
 make test        # run app tests on a simulator
 ```
 
-The Xcode project is generated from `project.yml` and not committed. Set your development team in Xcode before running on a device.
+The Xcode project is generated from `project.yml` and not committed.
+
+## CI
+
+- **GitHub Actions** (`.github/workflows/ci.yml`) runs on every pull request: package tests and app tests on a simulator.
+- **Xcode Cloud** builds for TestFlight and the App Store. `ci_scripts/ci_post_clone.sh` generates the Xcode project after Xcode Cloud clones the repo, since it isn't committed. Set your development team in Xcode before running on a device.
 
 ## Layout
 
