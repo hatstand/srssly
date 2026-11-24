@@ -2,9 +2,10 @@ import Foundation
 import SrsslyCore
 import SwiftData
 
-// Models in this file sync through CloudKit, which requires that every
-// property is optional or has a default, that there are no unique
-// constraints, and that relationships are optional. Keep it that way.
+// Models in this file are synced by `CloudSync` as the CloudKit record types
+// in docs/cloudkit-schema.md. When adding a synced field, add it there and in
+// CloudRecords.swift, and set `modifiedAt` whenever the user changes something
+// (last writer wins).
 //
 // Only small, user-authored state syncs. Articles are fetched by each device
 // and live in the local store (see LocalModels.swift).
@@ -15,8 +16,8 @@ public final class Subscription {
     /// Stable across devices. Articles and read state refer to this.
     public var id: UUID = UUID()
     public var feedURLString: String = ""
-    /// `FeedURL.canonicalKey` of the feed URL, for finding duplicates (CloudKit
-    /// can't enforce uniqueness, and two devices may import the same OPML).
+    /// `FeedURL.canonicalKey` of the feed URL, for finding duplicates (two
+    /// devices may import the same OPML). Derived locally, not synced.
     public var canonicalKey: String = ""
     public var siteURLString: String?
     public var title: String = ""
@@ -24,6 +25,10 @@ public final class Subscription {
     public var addedAt: Date = Date.now
     public var sortIndex: Int = 0
     public var cacheModeRaw: String = CacheMode.automatic.rawValue
+    /// When this was last changed on any device; decides sync conflicts.
+    public var modifiedAt: Date = Date.now
+    /// The CloudKit record's system fields (change tag etc.), archived.
+    public var cloudKitSystemFields: Data?
 
     public init(feedURL: URL, title: String, folder: String? = nil, siteURL: URL? = nil) {
         self.feedURLString = feedURL.absoluteString
@@ -38,13 +43,17 @@ public final class Subscription {
 
     public var cacheMode: CacheMode {
         get { CacheMode(rawValue: cacheModeRaw) ?? .automatic }
-        set { cacheModeRaw = newValue.rawValue }
+        set {
+            cacheModeRaw = newValue.rawValue
+            modifiedAt = .now
+        }
     }
 
     /// Point the subscription at a new feed URL, e.g. after a permanent redirect.
     public func updateFeedURL(_ url: URL) {
         feedURLString = url.absoluteString
         canonicalKey = FeedURL.canonicalKey(for: url)
+        modifiedAt = .now
     }
 }
 
@@ -57,7 +66,10 @@ public final class ArticleState {
     public var articleKey: String = ""
     public var isRead: Bool = false
     public var isStarred: Bool = false
+    /// When this was last changed on any device; decides sync conflicts.
     public var updatedAt: Date = Date.now
+    /// The CloudKit record's system fields (change tag etc.), archived.
+    public var cloudKitSystemFields: Data?
 
     public init(articleKey: String, isRead: Bool = false, isStarred: Bool = false) {
         self.articleKey = articleKey

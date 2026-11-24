@@ -13,7 +13,7 @@ enum SampleData {
     static var isRequested: Bool { ProcessInfo.processInfo.arguments.contains(launchArgument) }
 
     static func container() -> ModelContainer {
-        let container = try! SrsslyStore.makeContainer(inMemory: true, cloudKit: false)
+        let container = try! SrsslyStore.makeContainer(inMemory: true)
         populate(container.mainContext)
         return container
     }

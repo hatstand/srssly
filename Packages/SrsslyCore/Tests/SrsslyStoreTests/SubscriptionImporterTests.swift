@@ -10,7 +10,7 @@ import Testing
     var context: ModelContext { container.mainContext }
 
     init() throws {
-        container = try SrsslyStore.makeContainer(inMemory: true, cloudKit: false)
+        container = try SrsslyStore.makeContainer(inMemory: true)
     }
 
     private func subscriptions() throws -> [Subscription] {

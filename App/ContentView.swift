@@ -41,7 +41,7 @@ struct ContentView: View {
 
 #Preview("Empty") {
     ContentView()
-        .modelContainer(try! SrsslyStore.makeContainer(inMemory: true, cloudKit: false))
+        .modelContainer(try! SrsslyStore.makeContainer(inMemory: true))
 }
 
 #if DEBUG
