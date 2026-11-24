@@ -1,4 +1,5 @@
 import Foundation
+import SwiftSoup
 
 /// An image referenced from HTML.
 public struct ImageReference: Sendable, Hashable {
@@ -35,32 +36,42 @@ public struct HTMLResources: Sendable, Equatable {
     }
 
     /// Lists the images and stylesheets in `html`, resolving relative URLs
-    /// against the document's `<base href>` or `baseURL`.
+    /// against the document's `<base href>` or `baseURL`. Never fails: broken
+    /// HTML parses as a browser would, and unparseable input has no resources.
     public static func scan(_ html: String, baseURL: URL?) -> HTMLResources {
-        let tags = HTMLScanner.tags(in: html, named: ["base", "img", "source", "link", "meta"])
-        var base = baseURL
-        if let href = tags.first(where: { $0.name == "base" })?["href"], let url = resolve(href, against: baseURL) {
-            base = url
-        }
+        guard let doc = try? SwiftSoup.parse(html, baseURL?.absoluteString ?? ""),
+              let elements = try? doc.select("base[href], img, source, link[rel][href], meta[content]")
+        else { return HTMLResources() }
 
+        var base = baseURL
         var result = HTMLResources()
         var seenImages = Set<URL>()
         var seenStyles = Set<URL>()
-        for tag in tags {
-            switch tag.name {
+        var sawBase = false
+        for element in elements {
+            let attr = { (name: String) -> String? in
+                guard element.hasAttr(name), let value = try? element.attr(name) else { return nil }
+                return value
+            }
+            switch element.tagNameNormal() {
+            case "base":
+                // Only the first <base> counts, as in browsers.
+                guard !sawBase else { continue }
+                sawBase = true
+                if let href = attr("href"), let url = resolve(href, against: baseURL) { base = url }
             case "img", "source":
-                guard !isTrackingPixel(tag), let url = imageURL(tag, base: base), !isTracker(url) else { continue }
+                guard !isTrackingPixel(attr), let url = imageURL(attr, base: base), !isTracker(url) else { continue }
                 if seenImages.insert(url).inserted {
-                    result.images.append(ImageReference(url: url, alt: nonEmpty(tag["alt"]), title: nonEmpty(tag["title"])))
+                    result.images.append(ImageReference(url: url, alt: nonEmpty(attr("alt")), title: nonEmpty(attr("title"))))
                 }
             case "link":
-                let rel = (tag["rel"] ?? "").lowercased().split(separator: " ")
-                guard rel.contains("stylesheet"), let href = tag["href"], let url = resolve(href, against: base) else { continue }
+                let rel = (attr("rel") ?? "").lowercased().split(separator: " ")
+                guard rel.contains("stylesheet"), let href = attr("href"), let url = resolve(href, against: base) else { continue }
                 if seenStyles.insert(url).inserted { result.stylesheets.append(url) }
             case "meta":
-                let key = (tag["property"] ?? tag["name"] ?? "").lowercased()
+                let key = (attr("property") ?? attr("name") ?? "").lowercased()
                 guard key == "og:image" || key == "twitter:image", result.previewImage == nil,
-                      let content = tag["content"] else { continue }
+                      let content = attr("content") else { continue }
                 result.previewImage = resolve(content, against: base)
             default:
                 break
@@ -69,17 +80,24 @@ public struct HTMLResources: Sendable, Equatable {
         return result
     }
 
+    /// Roughly how many visible characters the HTML has, ignoring
+    /// whitespace, scripts and styles. Tells a full post from a teaser.
+    public static func visibleTextLength(_ html: String) -> Int {
+        guard let doc = try? SwiftSoup.parseBodyFragment(html), let text = try? doc.text() else { return 0 }
+        return text.filter { !$0.isWhitespace }.count
+    }
+
     // MARK: - Helpers
 
     /// The best URL for an image: the largest `srcset` candidate, else the
     /// lazy-loading attributes, else `src` (which lazy loaders often point
     /// at a placeholder).
-    static func imageURL(_ tag: HTMLTag, base: URL?) -> URL? {
-        if let srcset = tag["srcset"] ?? tag["data-srcset"], let best = largestCandidate(srcset), let url = resolve(best, against: base) {
+    static func imageURL(_ attr: (String) -> String?, base: URL?) -> URL? {
+        if let srcset = attr("srcset") ?? attr("data-srcset"), let best = largestCandidate(srcset), let url = resolve(best, against: base) {
             return url
         }
         for attribute in ["data-src", "data-lazy-src", "data-original", "src"] {
-            if let value = tag[attribute], let url = resolve(value, against: base) { return url }
+            if let value = attr(attribute), let url = resolve(value, against: base) { return url }
         }
         return nil
     }
@@ -106,8 +124,8 @@ public struct HTMLResources: Sendable, Equatable {
         return url
     }
 
-    private static func isTrackingPixel(_ tag: HTMLTag) -> Bool {
-        tag["width"]?.trimmingCharacters(in: .whitespaces) == "1" && tag["height"]?.trimmingCharacters(in: .whitespaces) == "1"
+    private static func isTrackingPixel(_ attr: (String) -> String?) -> Bool {
+        attr("width")?.trimmingCharacters(in: .whitespaces) == "1" && attr("height")?.trimmingCharacters(in: .whitespaces) == "1"
     }
 
     /// FeedBurner and similar services append tracking images to every item.

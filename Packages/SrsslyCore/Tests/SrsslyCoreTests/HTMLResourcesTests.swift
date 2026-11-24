@@ -2,35 +2,35 @@ import Foundation
 import Testing
 @testable import SrsslyCore
 
-@Suite struct HTMLScannerTests {
-    @Test func readsQuotedUnquotedAndBareAttributes() {
-        let tags = HTMLScanner.tags(in: #"<IMG SRC=a.png alt='A "b"' title="x &amp; y" hidden><p>t</p>"#, named: ["img"])
-        #expect(tags == [HTMLTag(name: "img", attributes: ["src": "a.png", "alt": "A \"b\"", "title": "x & y", "hidden": ""])])
+@Suite struct HTMLParsingTests {
+    let page = URL(string: "https://comic.test/strip/")!
+
+    @Test func readsQuotedUnquotedAndEncodedAttributes() {
+        let html = #"<IMG SRC=a.png alt='A "b"' title="x &amp; y" hidden><p>t</p>"#
+        #expect(HTMLResources.scan(html, baseURL: page).images == [
+            ImageReference(url: URL(string: "https://comic.test/strip/a.png")!, alt: "A \"b\"", title: "x & y"),
+        ])
     }
 
-    @Test func skipsCommentsScriptsAndStyles() {
+    @Test func ignoresCommentsScriptsAndStyles() {
         let html = """
         <!-- <img src="comment.png"> -->
         <script>document.write('<img src="script.png">')</script>
         <style>.a { background: url(style.png) }</style>
         <img src="real.png"/>
         """
-        #expect(HTMLScanner.tags(in: html, named: ["img"]).map { $0["src"] } == ["real.png"])
+        #expect(HTMLResources.scan(html, baseURL: page).images.map(\.url.lastPathComponent) == ["real.png"])
     }
 
     @Test func survivesBrokenMarkup() {
         let html = #"a < b <img src="x.png" <p>unterminated <img src="y"#
-        let srcs = HTMLScanner.tags(in: html, named: ["img"]).compactMap { $0["src"] }
-        #expect(srcs.first == "x.png")
-    }
-
-    @Test func decodesEntities() {
-        #expect(HTMLScanner.decodeEntities("a&amp;b&#39;c&#x41;&lt;&bogus;&") == "a&b'cA<&bogus;&")
+        #expect(HTMLResources.scan(html, baseURL: page).images.first?.url.lastPathComponent == "x.png")
     }
 
     @Test func countsVisibleTextOnly() {
-        #expect(HTMLScanner.visibleTextLength("<p>Hi <b>there</b></p><script>var x = 1</script>") == 7)
-        #expect(HTMLScanner.visibleTextLength("<p>héllo</p>") == 5)
+        #expect(HTMLResources.visibleTextLength("<p>Hi <b>there</b></p><script>var x = 1</script>") == 7)
+        #expect(HTMLResources.visibleTextLength("<p>héllo</p>") == 5)
+        #expect(HTMLResources.visibleTextLength("") == 0)
     }
 }
 
