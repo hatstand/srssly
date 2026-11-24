@@ -8,6 +8,7 @@ struct ArticleTimeline: View {
 
     @Query(Self.descriptor) private var articles: [Article]
     @Query(filter: #Predicate<ArticleState> { $0.isRead }) private var readStates: [ArticleState]
+    @Environment(\.feedRefresher) private var refresher
 
     /// Capped so the first frame never has to load the whole history.
     private static var descriptor: FetchDescriptor<Article> {
@@ -27,6 +28,7 @@ struct ArticleTimeline: View {
             )
         }
         .listStyle(.plain)
+        .refreshable { await refresher?.refresh(force: true) }
         .overlay {
             if articles.isEmpty {
                 ContentUnavailableView("Nothing Yet", systemImage: "tray", description: Text("New articles will appear here."))

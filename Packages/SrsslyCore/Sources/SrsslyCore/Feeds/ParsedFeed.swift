@@ -66,7 +66,7 @@ public struct Enclosure: Sendable, Equatable {
     }
 }
 
-public enum FeedParseError: Error, Equatable {
+public enum FeedParseError: Error, Equatable, Sendable {
     /// The document is an HTML page, not a feed. Look for a feed link in it
     /// with `FeedDiscovery` (some old feed URLs now redirect to the site).
     case htmlPage

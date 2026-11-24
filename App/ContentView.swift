@@ -8,6 +8,9 @@ struct ContentView: View {
     @Query(sort: [SortDescriptor(\Subscription.sortIndex), SortDescriptor(\Subscription.title)])
     private var subscriptions: [Subscription]
 
+    @Environment(\.feedRefresher) private var refresher
+    @Environment(\.scenePhase) private var scenePhase
+
     var body: some View {
         NavigationStack {
             Group {
@@ -24,6 +27,12 @@ struct ContentView: View {
             .navigationTitle("Srssly")
         }
         .onAppear { LaunchMetrics.firstContentAppeared() }
+        // Refresh after the first frame, and again on returning to the app.
+        // The policy skips feeds fetched in the last few minutes.
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            await refresher?.refresh()
+        }
     }
 }
 
