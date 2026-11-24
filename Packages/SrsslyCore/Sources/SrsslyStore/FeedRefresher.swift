@@ -43,13 +43,25 @@ public actor FeedRefresher: ModelActor {
 
     /// Refreshes every feed that is due, or every feed when `force` is set
     /// (pull to refresh). Concurrent calls share one refresh.
+    ///
+    /// Cancelling (e.g. when a background task's time runs out) stops
+    /// starting new fetches and saves what has arrived so far. Fetches cut
+    /// off by the cancellation don't count as failures.
     @discardableResult
     public func refresh(force: Bool = false, now: Date = .now) async -> RefreshSummary {
-        if let inFlight { return await inFlight.value }
-        let task = Task { await self.run(force: force, now: now) }
-        inFlight = task
-        let summary = await task.value
-        inFlight = nil
+        let task: Task<RefreshSummary, Never>
+        if let inFlight {
+            task = inFlight
+        } else {
+            task = Task { await self.run(force: force, now: now) }
+            inFlight = task
+        }
+        let summary = await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+        if inFlight == task { inFlight = nil }
         return summary
     }
 
@@ -84,8 +96,10 @@ public actor FeedRefresher: ModelActor {
 
         let results = await fetchAll(jobs)
         let byID = Dictionary(subscriptions.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let cancelled = Task.isCancelled
         for (id, result) in results {
             guard let sub = byID[id] else { continue }
+            if cancelled, case .failure = result { continue }
             let state = states[id] ?? {
                 let s = FeedFetchState(subscriptionID: id)
                 modelContext.insert(s)
@@ -93,7 +107,7 @@ public actor FeedRefresher: ModelActor {
             }()
             apply(result, to: sub, state: state, now: now, summary: &summary)
         }
-        summary.attempted = jobs.count
+        summary.attempted = results.count
 
         do {
             try modelContext.save()
@@ -111,7 +125,7 @@ public actor FeedRefresher: ModelActor {
             var results: [(UUID, Result<FetchResult, FetchError>)] = []
             var pending = jobs[...]
             func addNext() {
-                guard let (id, request) = pending.popFirst() else { return }
+                guard !Task.isCancelled, let (id, request) = pending.popFirst() else { return }
                 group.addTask {
                     do throws(FetchError) {
                         return (id, .success(try await fetcher.fetch(request)))

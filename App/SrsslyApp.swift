@@ -9,6 +9,8 @@ struct SrsslyApp: App {
     let container: ModelContainer
     let refresher: FeedRefresher?
 
+    @Environment(\.scenePhase) private var scenePhase
+
     init() {
         container = Self.makeContainer()
         #if DEBUG
@@ -25,6 +27,14 @@ struct SrsslyApp: App {
                 .environment(\.feedRefresher, refresher)
         }
         .modelContainer(container)
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background, refresher != nil { BackgroundRefresh.schedule() }
+        }
+        .backgroundTask(.appRefresh(BackgroundRefresh.refreshID)) { [refresher] in
+            // Schedule the next one first, in case this run is cut short.
+            BackgroundRefresh.schedule()
+            await refresher?.refresh()
+        }
     }
 
     private static func makeContainer() -> ModelContainer {
