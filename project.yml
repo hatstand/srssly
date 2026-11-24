@@ -1,0 +1,43 @@
+# Generate the Xcode project with `make project` (needs `brew install xcodegen`).
+# The generated Srssly.xcodeproj is not committed.
+name: Srssly
+options:
+  bundleIdPrefix: org.srssly
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    GENERATE_INFOPLIST_FILE: YES
+    # Set your team in Local.xcconfig or Xcode; left empty so CI builds unsigned.
+    DEVELOPMENT_TEAM: ""
+packages:
+  SrsslyCore:
+    path: Packages/SrsslyCore
+targets:
+  Srssly:
+    type: application
+    platform: iOS
+    sources: [App]
+    dependencies:
+      - package: SrsslyCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.srssly.Srssly
+        INFOPLIST_KEY_CFBundleDisplayName: Srssly
+        # iOS requires a launch screen. An empty generated one is just the
+        # system background colour, so there is no splash: the first frame
+        # of real UI replaces it as soon as it is drawn.
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        TARGETED_DEVICE_FAMILY: "1,2"
+schemes:
+  Srssly:
+    build:
+      targets:
+        Srssly: all

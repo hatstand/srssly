@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: SrsslyCore tests
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test --package-path Packages/SrsslyCore
+
+  app:
+    name: App build and test
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen
+      - run: xcodegen generate
+      - run: ./scripts/xcodebuild.sh build
