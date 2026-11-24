@@ -33,9 +33,20 @@ public struct FetchResult: Sendable, Equatable {
     public var etag: String?
     public var lastModified: String?
     public var contentHash: String?
+
+    public init(
+        status: Status, movedTo: URL? = nil, etag: String? = nil,
+        lastModified: String? = nil, contentHash: String? = nil
+    ) {
+        self.status = status
+        self.movedTo = movedTo
+        self.etag = etag
+        self.lastModified = lastModified
+        self.contentHash = contentHash
+    }
 }
 
-public enum FetchError: Error, Equatable {
+public enum FetchError: Error, Equatable, Sendable {
     case http(status: Int)
     /// The URL serves a web page with no feed link in it.
     case notAFeed
