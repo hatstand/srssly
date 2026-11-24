@@ -24,4 +24,4 @@ jobs:
       - uses: actions/checkout@v4
       - run: brew install xcodegen
       - run: xcodegen generate
-      - run: ./scripts/xcodebuild.sh build
+      - run: ./scripts/xcodebuild.sh test
