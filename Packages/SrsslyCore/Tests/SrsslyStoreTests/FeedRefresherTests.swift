@@ -5,7 +5,7 @@ import Testing
 @testable import SrsslyStore
 
 /// Returns canned results per feed URL and records what it was asked for.
-private actor StubFetcher: FeedFetching {
+actor StubFetcher: FeedFetching {
     var results: [URL: Result<FetchResult, FetchError>] = [:]
     var requests: [FetchRequest] = []
 
@@ -18,7 +18,7 @@ private actor StubFetcher: FeedFetching {
     }
 }
 
-private func updated(_ items: [ParsedItem], title: String? = "Feed", etag: String? = "\"e\"", movedTo: URL? = nil) -> Result<FetchResult, FetchError> {
+func updated(_ items: [ParsedItem], title: String? = "Feed", etag: String? = "\"e\"", movedTo: URL? = nil) -> Result<FetchResult, FetchError> {
     .success(FetchResult(
         status: .updated(ParsedFeed(format: .rss2, title: title, siteURL: URL(string: "https://site.test/"), items: items)),
         movedTo: movedTo, etag: etag, lastModified: nil, contentHash: "h"
