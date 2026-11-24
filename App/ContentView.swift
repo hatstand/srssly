@@ -9,6 +9,8 @@ struct ContentView: View {
     private var subscriptions: [Subscription]
 
     @Environment(\.feedRefresher) private var refresher
+    @Environment(\.offlineCacher) private var offlineCacher
+    @State private var showingSettings = false
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -27,14 +29,22 @@ struct ContentView: View {
             .navigationTitle("Srssly")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) { AddFeedsButton() }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Settings", systemImage: "gearshape") { showingSettings = true }
+                }
             }
         }
+        .sheet(isPresented: $showingSettings) { SettingsView() }
         .onAppear { LaunchMetrics.firstContentAppeared() }
         // Refresh after the first frame, and again on returning to the app.
         // The policy skips feeds fetched in the last few minutes.
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
             await refresher?.refresh()
+            // Then save new articles for offline reading, newest first. Wi-Fi
+            // only unless mobile data is allowed in Settings.
+            await offlineCacher?.run(allowsCellular: OfflineSettings.allowsCellular)
+            await offlineCacher?.prune()
         }
     }
 }

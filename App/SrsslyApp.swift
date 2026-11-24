@@ -8,6 +8,7 @@ import SwiftUI
 struct SrsslyApp: App {
     let container: ModelContainer
     let refresher: FeedRefresher?
+    let offlineCacher: OfflineCacher?
     let cloudSync: CloudSync?
 
     static let cloudContainerID = "iCloud.com.purplehatstands.srssly"
@@ -23,6 +24,10 @@ struct SrsslyApp: App {
         let online = true
         #endif
         refresher = online ? FeedRefresher(container: container) : nil
+        offlineCacher = online ? Self.makeOfflineCacher(container: container) : nil
+        if let refresher, let offlineCacher {
+            BackgroundCaching.register(refresher: refresher, cacher: offlineCacher)
+        }
         cloudSync = online ? CloudSync(
             container: container,
             cloudContainerID: Self.cloudContainerID,
@@ -34,16 +39,32 @@ struct SrsslyApp: App {
         WindowGroup {
             ContentView()
                 .environment(\.feedRefresher, refresher)
+                .environment(\.offlineCacher, offlineCacher)
                 .task { await cloudSync?.start() }
         }
         .modelContainer(container)
         .onChange(of: scenePhase) { _, phase in
-            if phase == .background, refresher != nil { BackgroundRefresh.schedule() }
+            if phase == .background, refresher != nil {
+                BackgroundRefresh.schedule()
+                if offlineCacher != nil { BackgroundCaching.schedule() }
+            }
         }
-        .backgroundTask(.appRefresh(BackgroundRefresh.refreshID)) { [refresher] in
+        .backgroundTask(.appRefresh(BackgroundRefresh.refreshID)) { [refresher, offlineCacher] in
             // Schedule the next one first, in case this run is cut short.
             BackgroundRefresh.schedule()
             await refresher?.refresh()
+            // Use what's left of the ~30 seconds to save the newest articles.
+            await offlineCacher?.run(allowsCellular: OfflineSettings.allowsCellular)
+        }
+    }
+
+    private static func makeOfflineCacher(container: ModelContainer) -> OfflineCacher? {
+        do {
+            return OfflineCacher(container: container, cache: try OfflineCache())
+        } catch {
+            Logger(subsystem: "com.purplehatstands.srssly", category: "offline")
+                .error("Opening the offline cache failed: \(error, privacy: .public)")
+            return nil
         }
     }
 
@@ -69,4 +90,5 @@ struct SrsslyApp: App {
 
 extension EnvironmentValues {
     @Entry var feedRefresher: FeedRefresher? = nil
+    @Entry var offlineCacher: OfflineCacher? = nil
 }
