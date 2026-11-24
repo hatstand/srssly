@@ -33,6 +33,7 @@ public enum OPML {
         parser.shouldResolveExternalEntities = false
         parser.delegate = delegate
         let ok = parser.parse()
+        if delegate.wrongRoot { throw .notOPML }
         guard delegate.sawRoot else {
             if !ok { throw .malformed(parser.parserError?.localizedDescription ?? "unknown error") }
             throw .notOPML
@@ -46,6 +47,7 @@ public enum OPML {
 
 private final class OPMLDelegate: NSObject, XMLParserDelegate {
     var sawRoot = false
+    var wrongRoot = false
     var feeds: [OPMLFeed] = []
     /// One entry per open <outline>: the folder title it opened, or nil.
     private var stack: [String?] = []
@@ -55,7 +57,11 @@ private final class OPMLDelegate: NSObject, XMLParserDelegate {
         qualifiedName: String?, attributes: [String: String]
     ) {
         if !sawRoot {
-            guard name.lowercased() == "opml" else { parser.abortParsing(); return }
+            guard name.lowercased() == "opml" else {
+                wrongRoot = true
+                parser.abortParsing()
+                return
+            }
             sawRoot = true
             return
         }
