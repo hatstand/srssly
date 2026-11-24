@@ -170,8 +170,14 @@ public actor FeedRefresher: ModelActor {
                 summary.unchanged += 1
             case .updated(let feed):
                 summary.updated += 1
-                if sub.title.isEmpty, let title = feed.title { sub.title = title }
-                if sub.siteURLString == nil { sub.siteURLString = feed.siteURL?.absoluteString }
+                if sub.title.isEmpty, let title = feed.title {
+                    sub.title = title
+                    sub.modifiedAt = now
+                }
+                if sub.siteURLString == nil, let site = feed.siteURL {
+                    sub.siteURLString = site.absoluteString
+                    sub.modifiedAt = now
+                }
                 summary.newArticles += upsert(feed.items, for: sub.id, state: state, now: now)
             }
         }

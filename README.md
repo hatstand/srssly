@@ -20,16 +20,16 @@ The Xcode project is generated from `project.yml` and not committed.
 
 ### iCloud setup (once)
 
-Unsigned simulator builds (and CI) run without iCloud: the synced store just stays local. To sync for real:
+CI runs the app with `-SrsslySampleData`, which never starts sync. Local builds are signed with the team in `project.yml`, which includes the iCloud entitlement that sync needs. To sync for real:
 
 1. The development team (`CZ8XD8GTGZ`) and bundle ID (`com.purplehatstands.srssly`) are set in `project.yml`.
 2. In the Apple Developer portal, create the iCloud container `iCloud.com.purplehatstands.srssly` (Xcode offers to do this under Signing & Capabilities).
 3. Run on two devices or simulators signed in to the same Apple Account.
-4. Before the first TestFlight build, deploy the CloudKit schema to production in the CloudKit Console.
+4. Before the first TestFlight build, deploy the CloudKit schema to production in the CloudKit Console (see [docs/cloudkit-schema.md](docs/cloudkit-schema.md)).
 
 ## Data
 
-- **Synced store** (CloudKit private database): `Subscription` and `ArticleState` (read/starred, only for articles you have touched). CloudKit rules apply: no unique constraints, every property optional or defaulted.
+- **Synced store**: `Subscription` and `ArticleState` (read/starred, only for articles you have touched). `CloudSync` syncs these with `CKSyncEngine` using our own CloudKit record types, so a web client can share them. See [docs/cloudkit-schema.md](docs/cloudkit-schema.md).
 - **Local store** (this device only): `Article` and `FeedFetchState`. Each device fetches feeds itself, so this is a rebuildable cache.
 
 Articles join to their state by `ArticleKey`, derived from the subscription's synced ID and the item's GUID (or link), so it matches across devices.

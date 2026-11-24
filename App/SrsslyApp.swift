@@ -8,6 +8,9 @@ import SwiftUI
 struct SrsslyApp: App {
     let container: ModelContainer
     let refresher: FeedRefresher?
+    let cloudSync: CloudSync?
+
+    static let cloudContainerID = "iCloud.com.purplehatstands.srssly"
 
     @Environment(\.scenePhase) private var scenePhase
 
@@ -15,16 +18,23 @@ struct SrsslyApp: App {
         container = Self.makeContainer()
         #if DEBUG
         // Sample data is for previews and UI tests: never touch the network.
-        refresher = SampleData.isRequested ? nil : FeedRefresher(container: container)
+        let online = !SampleData.isRequested
         #else
-        refresher = FeedRefresher(container: container)
+        let online = true
         #endif
+        refresher = online ? FeedRefresher(container: container) : nil
+        cloudSync = online ? CloudSync(
+            container: container,
+            cloudContainerID: Self.cloudContainerID,
+            stateDirectory: URL.applicationSupportDirectory
+        ) : nil
     }
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environment(\.feedRefresher, refresher)
+                .task { await cloudSync?.start() }
         }
         .modelContainer(container)
         .onChange(of: scenePhase) { _, phase in
@@ -49,7 +59,7 @@ struct SrsslyApp: App {
             // Never block launch on the store: fall back to an empty in-memory
             // one so the UI still renders, and surface the problem in-app later.
             do {
-                return try SrsslyStore.makeContainer(inMemory: true, cloudKit: false)
+                return try SrsslyStore.makeContainer(inMemory: true)
             } catch {
                 fatalError("Could not create even an in-memory store: \(error)")
             }

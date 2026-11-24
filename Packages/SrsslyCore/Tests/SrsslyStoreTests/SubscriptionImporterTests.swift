@@ -10,11 +10,11 @@ import Testing
     var context: ModelContext { container.mainContext }
 
     init() throws {
-        container = try SrsslyStore.makeContainer(inMemory: true, cloudKit: false)
+        container = try SrsslyStore.makeContainer(inMemory: true)
     }
 
     private func subscriptions() throws -> [Subscription] {
-        try context.fetch(FetchDescriptor<Subscription>(sortBy: [SortDescriptor(\.sortIndex)]))
+        try context.fetch(FetchDescriptor<Subscription>(sortBy: [SortDescriptor(\.sortKey)]))
     }
 
     @Test func importsInOrderWithFoldersAndSkipsDuplicates() throws {
@@ -28,12 +28,14 @@ import Testing
         let subs = try subscriptions()
         #expect(subs.map(\.title) == ["Popehat", "xkcd"])
         #expect(subs.map(\.folder) == ["Random", "Comics"])
-        #expect(subs.map(\.sortIndex) == [0, 1])
+        #expect(subs[0].sortKey < subs[1].sortKey)
+        #expect(subs[0].id == FeedURL.subscriptionID(for: URL(string: "http://www.popehat.com/feed/")!))
 
         // Importing the same file again adds nothing; new feeds go after the end.
         let again = try SubscriptionImporter.add(feeds + [OPMLFeed(title: "New", feedURL: URL(string: "https://new.test/feed")!)], to: context)
         #expect(again == ImportSummary(added: 1, duplicates: 3))
-        #expect(try subscriptions().last?.sortIndex == 2)
+        let all = try subscriptions()
+        #expect(all.map(\.title) == ["Popehat", "xkcd", "New"])
     }
 
     @Test(arguments: [

@@ -33,7 +33,7 @@ func updated(_ items: [ParsedItem], title: String? = "Feed", etag: String? = "\"
     let now = Date(timeIntervalSince1970: 1_800_000_000)
 
     init() throws {
-        container = try SrsslyStore.makeContainer(inMemory: true, cloudKit: false)
+        container = try SrsslyStore.makeContainer(inMemory: true)
     }
 
     private func addSubscription(_ url: URL? = nil, title: String = "") throws -> Subscription {
@@ -183,7 +183,7 @@ actor SlowFetcher: FeedFetching {
 @MainActor
 @Suite struct FeedRefresherCancellationTests {
     @Test func cancellingKeepsFinishedFeedsAndDoesNotCountFailures() async throws {
-        let container = try SrsslyStore.makeContainer(inMemory: true, cloudKit: false)
+        let container = try SrsslyStore.makeContainer(inMemory: true)
         let fast = URL(string: "https://fast.test/feed")!
         container.mainContext.insert(Subscription(feedURL: fast, title: "Fast"))
         container.mainContext.insert(Subscription(feedURL: URL(string: "https://slow.test/feed")!, title: "Slow"))

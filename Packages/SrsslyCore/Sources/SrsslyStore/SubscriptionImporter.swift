@@ -19,17 +19,21 @@ public enum SubscriptionImporter {
     public static func add(_ feeds: [OPMLFeed], to context: ModelContext) throws -> ImportSummary {
         let existing = try context.fetch(FetchDescriptor<Subscription>())
         var keys = Set(existing.map(\.canonicalKey))
-        var nextIndex = (existing.map(\.sortIndex).max() ?? -1) + 1
         var summary = ImportSummary()
+        var toAdd: [OPMLFeed] = []
         for feed in feeds {
-            let key = FeedURL.canonicalKey(for: feed.feedURL)
-            guard keys.insert(key).inserted else {
+            guard keys.insert(FeedURL.canonicalKey(for: feed.feedURL)).inserted else {
                 summary.duplicates += 1
                 continue
             }
+            toAdd.append(feed)
+        }
+        // New feeds go after the current end of the list, evenly spaced so
+        // the keys stay short.
+        let sortKeys = SortKey.keys(between: existing.map(\.sortKey).max(), nil, count: toAdd.count)
+        for (feed, sortKey) in zip(toAdd, sortKeys) {
             let sub = Subscription(feedURL: feed.feedURL, title: feed.title, folder: feed.folder, siteURL: feed.siteURL)
-            sub.sortIndex = nextIndex
-            nextIndex += 1
+            sub.sortKey = sortKey
             context.insert(sub)
             summary.added += 1
         }

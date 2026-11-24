@@ -2,24 +2,24 @@ import Foundation
 import SwiftData
 
 public enum SrsslyStore {
-    /// Synced through the app's CloudKit private database.
+    /// User-authored state that `CloudSync` syncs through CloudKit.
     public static var syncedModels: [any PersistentModel.Type] { [Subscription.self, ArticleState.self] }
     /// Kept on this device only.
     public static var localModels: [any PersistentModel.Type] { [Article.self, FeedFetchState.self] }
 
-    /// Builds the app's container: a synced store and a local store.
+    /// Builds the app's container: a store for synced models and one for
+    /// device-only models.
     ///
-    /// - Parameters:
-    ///   - inMemory: for tests and previews.
-    ///   - cloudKit: sync the synced store via CloudKit. With `.automatic`,
-    ///     SwiftData uses the container in the app's entitlements, and stays
-    ///     local when there are none (unsigned simulator builds, CI).
-    public static func makeContainer(inMemory: Bool = false, cloudKit: Bool = true) throws -> ModelContainer {
+    /// Both are plain local SwiftData stores. SwiftData's own CloudKit
+    /// mirroring is deliberately off: `CloudSync` syncs the synced models
+    /// with a CloudKit schema we define, so other clients (e.g. a web app
+    /// using CloudKit JS) can read and write the same records.
+    public static func makeContainer(inMemory: Bool = false) throws -> ModelContainer {
         let synced = ModelConfiguration(
             "Synced",
             schema: Schema(syncedModels),
             isStoredInMemoryOnly: inMemory,
-            cloudKitDatabase: cloudKit ? .automatic : .none
+            cloudKitDatabase: .none
         )
         let local = ModelConfiguration(
             "Local",
