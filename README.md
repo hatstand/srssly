@@ -22,11 +22,10 @@ The Xcode project is generated from `project.yml` and not committed.
 
 Unsigned simulator builds (and CI) run without iCloud: the synced store just stays local. To sync for real:
 
-1. In Xcode, set your development team on the Srssly target.
-2. If `org.srssly.Srssly` is taken, change `PRODUCT_BUNDLE_IDENTIFIER` in `project.yml` and the container ID in `App/Srssly.entitlements`.
-3. In the Apple Developer portal, create the iCloud container `iCloud.org.srssly.Srssly` (Xcode offers to do this under Signing & Capabilities).
-4. Run on two devices or simulators signed in to the same Apple Account.
-5. Before the first TestFlight build, deploy the CloudKit schema to production in the CloudKit Console.
+1. In Xcode, set your development team on the Srssly target. The bundle ID is `com.purplehatstands.srssly`.
+2. In the Apple Developer portal, create the iCloud container `iCloud.com.purplehatstands.srssly` (Xcode offers to do this under Signing & Capabilities).
+3. Run on two devices or simulators signed in to the same Apple Account.
+4. Before the first TestFlight build, deploy the CloudKit schema to production in the CloudKit Console.
 
 ## Data
 

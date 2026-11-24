@@ -2,7 +2,7 @@
 # The generated Srssly.xcodeproj is not committed.
 name: Srssly
 options:
-  bundleIdPrefix: org.srssly
+  bundleIdPrefix: com.purplehatstands
   deploymentTarget:
     iOS: "26.0"
   createIntermediateGroups: true
@@ -29,7 +29,7 @@ targets:
       path: App/Srssly.entitlements
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: org.srssly.Srssly
+        PRODUCT_BUNDLE_IDENTIFIER: com.purplehatstands.srssly
         # Merged with the generated Info.plist; holds keys with no build setting.
         INFOPLIST_FILE: App/Info.plist
         INFOPLIST_KEY_CFBundleDisplayName: Srssly
