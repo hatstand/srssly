@@ -5,7 +5,7 @@ import SwiftUI
 struct ContentView: View {
     // @Query reads synchronously from the local store, so the first frame
     // already has content. Nothing here waits on the network.
-    @Query(sort: [SortDescriptor(\Subscription.sortIndex), SortDescriptor(\Subscription.title)])
+    @Query(sort: [SortDescriptor(\Subscription.sortKey), SortDescriptor(\Subscription.title)])
     private var subscriptions: [Subscription]
 
     @Environment(\.feedRefresher) private var refresher

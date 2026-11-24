@@ -17,16 +17,15 @@ public actor CloudSync: CKSyncEngineDelegate {
     private let log = Logger(subsystem: "com.purplehatstands.srssly", category: "sync")
 
     private var engine: CKSyncEngine?
-    /// Applies fetched changes. Saves from it aren't echoed back as uploads.
-    private var applyContext: ModelContext
+    /// Contexts this actor writes with carry this author, so their saves
+    /// aren't echoed back as uploads.
+    static let author = "CloudSync"
     private nonisolated(unsafe) var saveObserver: (any NSObjectProtocol)?
 
     public init(container: ModelContainer, cloudContainerID: String, stateDirectory: URL) {
         self.container = container
         self.database = CKContainer(identifier: cloudContainerID).privateCloudDatabase
         self.stateURL = stateDirectory.appending(path: "CloudSyncState.json")
-        self.applyContext = ModelContext(container)
-        self.applyContext.autosaveEnabled = false
     }
 
     deinit {
@@ -72,13 +71,22 @@ public actor CloudSync: CKSyncEngineDelegate {
 
     // MARK: - Local changes
 
+    /// A fresh context for applying server changes. Fresh each time, so it
+    /// never holds values that another context has since changed.
+    private var applyContext: ModelContext {
+        let context = ModelContext(container)
+        context.author = Self.author
+        context.autosaveEnabled = false
+        return context
+    }
+
     private func observeLocalSaves() {
         guard saveObserver == nil else { return }
-        let applyID = ObjectIdentifier(applyContext)
+        let author = Self.author
         saveObserver = NotificationCenter.default.addObserver(
             forName: ModelContext.didSave, object: nil, queue: nil
         ) { [weak self] note in
-            guard let context = note.object as? ModelContext, ObjectIdentifier(context) != applyID else { return }
+            guard let context = note.object as? ModelContext, context.author != author else { return }
             let keys = [ModelContext.NotificationKey.insertedIdentifiers, .updatedIdentifiers]
             let ids = keys.flatMap { note.userInfo?[$0.rawValue] as? [PersistentIdentifier] ?? [] }
             guard !ids.isEmpty, let self else { return }
@@ -184,23 +192,14 @@ public actor CloudSync: CKSyncEngineDelegate {
             case CloudSchema.RecordType.subscription:
                 guard let uuid = UUID(uuidString: name) else { continue }
                 if let local = try? context.fetch(FetchDescriptor<Subscription>(predicate: #Predicate { $0.id == uuid })).first {
-                    if CloudMerge.remoteWins(local: local.modifiedAt, remote: CloudMerge.modifiedAt(of: record)) {
-                        local.apply(record)
-                    } else {
-                        local.cloudKitSystemFields = CloudSchema.archive(systemFieldsOf: record)
-                        reupload.append(record.recordID)
-                    }
+                    // Field-level three-way merge; re-upload if we kept local edits.
+                    if local.merge(record) { reupload.append(record.recordID) }
                 } else if let sub = Subscription(record: record) {
                     context.insert(sub)
                 }
             case CloudSchema.RecordType.articleState:
                 if let local = try? context.fetch(FetchDescriptor<ArticleState>(predicate: #Predicate { $0.articleKey == name })).first {
-                    if CloudMerge.remoteWins(local: local.updatedAt, remote: CloudMerge.modifiedAt(of: record)) {
-                        local.apply(record)
-                    } else {
-                        local.cloudKitSystemFields = CloudSchema.archive(systemFieldsOf: record)
-                        reupload.append(record.recordID)
-                    }
+                    if local.merge(record) { reupload.append(record.recordID) }
                 } else if let state = ArticleState(record: record) {
                     context.insert(state)
                 }
@@ -262,28 +261,35 @@ public actor CloudSync: CKSyncEngineDelegate {
         if !conflicts.isEmpty { applyFetched(modifications: conflicts, deletions: []) }
     }
 
+    /// The server accepted our record: remember its system fields (change tag)
+    /// and the saved values as the new merge base.
     private func storeSystemFields(of record: CKRecord, in context: ModelContext) {
         let name = record.recordID.recordName
-        let data = CloudSchema.archive(systemFieldsOf: record)
         if record.recordType == CloudSchema.RecordType.subscription, let uuid = UUID(uuidString: name) {
-            try? context.fetch(FetchDescriptor<Subscription>(predicate: #Predicate { $0.id == uuid })).first?.cloudKitSystemFields = data
+            (try? context.fetch(FetchDescriptor<Subscription>(predicate: #Predicate { $0.id == uuid })).first)?.markSynced(record)
         } else if record.recordType == CloudSchema.RecordType.articleState {
-            try? context.fetch(FetchDescriptor<ArticleState>(predicate: #Predicate { $0.articleKey == name })).first?.cloudKitSystemFields = data
+            (try? context.fetch(FetchDescriptor<ArticleState>(predicate: #Predicate { $0.articleKey == name })).first)?.markSynced(record)
         }
     }
 
     private func clearSystemFields(for id: CKRecord.ID, in context: ModelContext) {
         let name = id.recordName
         if let uuid = UUID(uuidString: name) {
-            try? context.fetch(FetchDescriptor<Subscription>(predicate: #Predicate { $0.id == uuid })).first?.cloudKitSystemFields = nil
+            if let sub = try? context.fetch(FetchDescriptor<Subscription>(predicate: #Predicate { $0.id == uuid })).first {
+                sub.cloudKitSystemFields = nil
+                sub.cloudKitBase = nil
+            }
         }
-        try? context.fetch(FetchDescriptor<ArticleState>(predicate: #Predicate { $0.articleKey == name })).first?.cloudKitSystemFields = nil
+        if let state = try? context.fetch(FetchDescriptor<ArticleState>(predicate: #Predicate { $0.articleKey == name })).first {
+            state.cloudKitSystemFields = nil
+            state.cloudKitBase = nil
+        }
     }
 
     private func clearSystemFields() {
         let context = applyContext
-        (try? context.fetch(FetchDescriptor<Subscription>()))?.forEach { $0.cloudKitSystemFields = nil }
-        (try? context.fetch(FetchDescriptor<ArticleState>()))?.forEach { $0.cloudKitSystemFields = nil }
+        (try? context.fetch(FetchDescriptor<Subscription>()))?.forEach { $0.cloudKitSystemFields = nil; $0.cloudKitBase = nil }
+        (try? context.fetch(FetchDescriptor<ArticleState>()))?.forEach { $0.cloudKitSystemFields = nil; $0.cloudKitBase = nil }
         try? context.save()
     }
 

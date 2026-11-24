@@ -26,9 +26,10 @@ enum SampleData {
             ("The Old New Thing", "https://devblogs.microsoft.com/oldnewthing/feed", "Programming"),
         ]
         let now = Date.now
+        let sortKeys = SortKey.keys(between: nil, nil, count: feeds.count)
         for (index, (title, url, folder)) in feeds.enumerated() {
             let sub = Subscription(feedURL: URL(string: url)!, title: title, folder: folder)
-            sub.sortIndex = index
+            sub.sortKey = sortKeys[index]
             context.insert(sub)
             for n in 0..<25 {
                 let guid = "\(url)#\(n)"

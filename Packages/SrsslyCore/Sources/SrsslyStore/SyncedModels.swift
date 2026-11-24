@@ -14,6 +14,8 @@ import SwiftData
 @Model
 public final class Subscription {
     /// Stable across devices. Articles and read state refer to this.
+    /// Derived from the feed URL when subscribing (`FeedURL.subscriptionID`)
+    /// so the same feed gets the same ID everywhere; never changes after.
     public var id: UUID = UUID()
     public var feedURLString: String = ""
     /// `FeedURL.canonicalKey` of the feed URL, for finding duplicates (two
@@ -23,14 +25,18 @@ public final class Subscription {
     public var title: String = ""
     public var folder: String?
     public var addedAt: Date = Date.now
-    public var sortIndex: Int = 0
+    /// Fractional key (`SortKey`) giving the order in the list.
+    public var sortKey: String = "V"
     public var cacheModeRaw: String = CacheMode.automatic.rawValue
     /// When this was last changed on any device; decides sync conflicts.
     public var modifiedAt: Date = Date.now
     /// The CloudKit record's system fields (change tag etc.), archived.
     public var cloudKitSystemFields: Data?
+    /// The synced fields as last seen on the server, for three-way merges.
+    public var cloudKitBase: Data?
 
     public init(feedURL: URL, title: String, folder: String? = nil, siteURL: URL? = nil) {
+        self.id = FeedURL.subscriptionID(for: feedURL)
         self.feedURLString = feedURL.absoluteString
         self.canonicalKey = FeedURL.canonicalKey(for: feedURL)
         self.title = title
@@ -70,6 +76,8 @@ public final class ArticleState {
     public var updatedAt: Date = Date.now
     /// The CloudKit record's system fields (change tag etc.), archived.
     public var cloudKitSystemFields: Data?
+    /// The synced fields as last seen on the server, for three-way merges.
+    public var cloudKitBase: Data?
 
     public init(articleKey: String, isRead: Bool = false, isStarred: Bool = false) {
         self.articleKey = articleKey
