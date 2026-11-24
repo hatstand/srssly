@@ -179,6 +179,10 @@ public actor FeedRefresher: ModelActor {
                     sub.modifiedAt = now
                 }
                 summary.newArticles += upsert(feed.items, for: sub.id, state: state, now: now)
+                if !feed.items.isEmpty {
+                    let detected = CacheModeDetector.detect(feed.items).rawValue
+                    if state.detectedCacheModeRaw != detected { state.detectedCacheModeRaw = detected }
+                }
             }
         }
     }

@@ -1,4 +1,5 @@
 import Foundation
+import SrsslyCore
 import SwiftData
 
 // Models in this file stay on the device. They are a cache of what the feeds
@@ -20,6 +21,21 @@ public final class Article {
     public var summaryHTML: String?
     public var contentHTML: String?
     public var fetchedAt: Date
+
+    // Offline cache bookkeeping, maintained by `OfflineCacher`.
+
+    /// When the article's page and images were saved, or nil if they
+    /// haven't been (yet).
+    public var offlineCachedAt: Date?
+    /// Failed attempts to cache; gives up after a few.
+    public var offlineAttempts: Int = 0
+    public var offlineError: String?
+    /// File name of the saved page in `OfflineCache`, for full-page articles.
+    public var offlinePageFile: String?
+    /// File names in `OfflineCache` of the images and stylesheets this
+    /// article uses. Files can be shared between articles.
+    public var offlineResources: [String] = []
+    public var offlineBytes: Int = 0
 
     public init(
         key: String,
@@ -63,6 +79,11 @@ public final class FeedFetchState {
     public var consecutiveFailures: Int = 0
     /// Date of the newest item seen, to spot dormant feeds.
     public var latestItemAt: Date?
+    /// How to cache this feed's articles when its subscription is on
+    /// `automatic`, from `CacheModeDetector` at the last update.
+    public var detectedCacheModeRaw: String?
+
+    public var detectedCacheMode: CacheMode? { detectedCacheModeRaw.flatMap(CacheMode.init(rawValue:)) }
 
     public init(subscriptionID: UUID) {
         self.subscriptionID = subscriptionID
