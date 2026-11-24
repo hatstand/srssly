@@ -12,8 +12,10 @@ settings:
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
     GENERATE_INFOPLIST_FILE: YES
-    # Set your team in Local.xcconfig or Xcode; left empty so CI builds unsigned.
-    DEVELOPMENT_TEAM: ""
+    # GitHub Actions builds pass CODE_SIGNING_ALLOWED=NO, so this only matters
+    # for local device builds and Xcode Cloud.
+    DEVELOPMENT_TEAM: CZ8XD8GTGZ
+    CODE_SIGN_STYLE: Automatic
 packages:
   SrsslyCore:
     path: Packages/SrsslyCore

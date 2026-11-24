@@ -22,7 +22,7 @@ The Xcode project is generated from `project.yml` and not committed.
 
 Unsigned simulator builds (and CI) run without iCloud: the synced store just stays local. To sync for real:
 
-1. In Xcode, set your development team on the Srssly target. The bundle ID is `com.purplehatstands.srssly`.
+1. The development team (`CZ8XD8GTGZ`) and bundle ID (`com.purplehatstands.srssly`) are set in `project.yml`.
 2. In the Apple Developer portal, create the iCloud container `iCloud.com.purplehatstands.srssly` (Xcode offers to do this under Signing & Capabilities).
 3. Run on two devices or simulators signed in to the same Apple Account.
 4. Before the first TestFlight build, deploy the CloudKit schema to production in the CloudKit Console.
@@ -33,6 +33,11 @@ Unsigned simulator builds (and CI) run without iCloud: the synced store just sta
 - **Local store** (this device only): `Article` and `FeedFetchState`. Each device fetches feeds itself, so this is a rebuildable cache.
 
 Articles join to their state by `ArticleKey`, derived from the subscription's synced ID and the item's GUID (or link), so it matches across devices.
+
+## CI
+
+- **GitHub Actions** (`.github/workflows/ci.yml`) runs on every pull request: package tests and app tests on a simulator.
+- **Xcode Cloud** builds for TestFlight and the App Store. `ci_scripts/ci_post_clone.sh` generates the Xcode project after Xcode Cloud clones the repo, since it isn't committed.
 
 ## Layout
 
