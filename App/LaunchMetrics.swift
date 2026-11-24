@@ -10,8 +10,8 @@ import OSLog
 /// (Points of Interest), so regressions show up.
 @MainActor
 enum LaunchMetrics {
-    private static let log = Logger(subsystem: "org.srssly.Srssly", category: "launch")
-    private static let signposter = OSSignposter(subsystem: "org.srssly.Srssly", category: .pointsOfInterest)
+    private static let log = Logger(subsystem: "com.purplehatstands.srssly", category: "launch")
+    private static let signposter = OSSignposter(subsystem: "com.purplehatstands.srssly", category: .pointsOfInterest)
     private static var reported = false
 
     static func firstContentAppeared() {

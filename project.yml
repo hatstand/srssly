@@ -49,7 +49,7 @@ targets:
       - target: Srssly
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: org.srssly.SrsslyUITests
+        PRODUCT_BUNDLE_IDENTIFIER: com.purplehatstands.srssly.uitests
 schemes:
   Srssly:
     build:
