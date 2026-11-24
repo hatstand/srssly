@@ -40,7 +40,7 @@ The ID never changes afterwards, even if `feedURL` does.
 | `siteURL` | String? | The site's home page. |
 | `title` | String | Display name. Empty until the first fetch fills it. |
 | `folder` | String? | Folder name, or none. |
-| `sortKey` | String | Order within the list: sort ascending by plain string comparison. A fractional key (digits `0-9A-Za-z`), so a new key always fits between two others. See `SortKey`. |
+| `sortKey` | String | Order within the list: sort ascending by plain string comparison. A fractional key of lowercase letters `a-z` only (so case-insensitive and localized sorts agree), and a new key always fits between two others. See `SortKey`. |
 | `cacheMode` | String | `automatic`, `feedContent`, `extractedArticle` or `fullPage`. |
 | `addedAt` | Date/time | |
 | `modifiedAt` | Date/time | Last change, for conflicts. |

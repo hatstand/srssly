@@ -26,7 +26,7 @@ public final class Subscription {
     public var folder: String?
     public var addedAt: Date = Date.now
     /// Fractional key (`SortKey`) giving the order in the list.
-    public var sortKey: String = "V"
+    public var sortKey: String = SortKey.middle
     public var cacheModeRaw: String = CacheMode.automatic.rawValue
     /// When this was last changed on any device; decides sync conflicts.
     public var modifiedAt: Date = Date.now

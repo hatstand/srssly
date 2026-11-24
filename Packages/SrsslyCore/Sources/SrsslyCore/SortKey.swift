@@ -2,13 +2,19 @@
 /// a new key between two others, so reordering never renumbers neighbours.
 /// Two devices reordering at the same time insert rather than overwrite.
 ///
-/// Keys use the digits `0-9A-Za-z` (base 62, which is also ASCII order),
-/// never end in `0`, and compare with plain string comparison. Based on
-/// David Greenspan's fractional indexing.
+/// Keys use only the lowercase letters `a-z` (base 26) and never end in `a`.
+/// Letters alone keep the order the same under every common string
+/// comparison: plain, case-insensitive, and the localized "standard" one
+/// that SwiftData's default `SortDescriptor` uses, which ignores case and
+/// compares runs of digits as numbers. Based on David Greenspan's fractional
+/// indexing.
 public enum SortKey {
-    static let digits = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+    static let digits = Array("abcdefghijklmnopqrstuvwxyz")
     private static let values: [Character: Int] = Dictionary(uniqueKeysWithValues: digits.enumerated().map { ($1, $0) })
     static var base: Int { digits.count }
+
+    /// The key for a lone item, and the default for a new subscription.
+    public static let middle = "n"
 
     /// A key strictly between `a` and `b` (nil means the start or end of the
     /// list). Precondition: `a < b` when both are given.

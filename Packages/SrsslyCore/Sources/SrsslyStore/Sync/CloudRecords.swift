@@ -96,7 +96,7 @@ public struct SubscriptionFields: Codable, Equatable, Sendable {
         siteURL = record[F.siteURL] as? String
         title = record[F.title] as? String ?? ""
         folder = record[F.folder] as? String
-        sortKey = record[F.sortKey] as? String ?? "V"
+        sortKey = record[F.sortKey] as? String ?? SortKey.middle
         cacheMode = record[F.cacheMode] as? String ?? CacheMode.automatic.rawValue
         addedAt = record[F.addedAt] as? Date ?? .distantPast
     }
