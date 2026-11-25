@@ -10,6 +10,7 @@ struct ArticleReaderView: View {
     let subscription: Subscription?
 
     @Environment(\.offlineCacher) private var offlineCacher
+    @Environment(\.modelContext) private var context
     @State private var showingWebPage = false
     @State private var content: ReaderWebView.Content?
 
@@ -30,6 +31,10 @@ struct ArticleReaderView: View {
                 }
             }
             .task(id: showingWebPage) { content = await makeContent() }
+            .onAppear {
+                // Opening an article reads it. Synced to other devices.
+                try? ArticleStates.set(read: true, for: [article.key], in: context)
+            }
     }
 
     /// Builds the reader HTML off the main actor; parsing a big page can
