@@ -7,7 +7,9 @@ import Foundation
 /// Most feeds either carry the whole post (full-text blogs, and most comics,
 /// whose items are just the image) or only a teaser that links out. A feed
 /// whose items mostly have real content is `.feedContent`; otherwise the
-/// linked page is needed, so it is `.fullPage`.
+/// article is extracted from the linked page (`.extractedArticle`). Whole
+/// pages (`.fullPage`) are only kept when a site rule or the subscription
+/// asks for them, e.g. comics whose page *is* the content.
 public enum CacheModeDetector {
     /// Visible characters above which an item counts as a full post.
     public static let fullTextThreshold = 500
@@ -18,16 +20,18 @@ public enum CacheModeDetector {
         // Nothing to fetch: the feed's content is all there is.
         guard !linked.isEmpty else { return .feedContent }
         let complete = linked.filter(hasContent).count
-        return complete * 2 >= linked.count ? .feedContent : .fullPage
+        return complete * 2 >= linked.count ? .feedContent : .extractedArticle
     }
 
     /// The mode to use for an item: the subscription's choice; when that is
     /// automatic, a site rule's mode; else the mode detected from the feed.
     ///
-    /// `.extractedArticle` is not implemented yet and is kept as a full page.
+    /// Detection used to say `.fullPage` for summary-only feeds; that is
+    /// read as `.extractedArticle` until the feed is next refreshed.
     public static func effectiveMode(_ chosen: CacheMode, siteRule: CacheMode? = nil, detected: CacheMode) -> CacheMode {
-        let mode = chosen != .automatic ? chosen : (siteRule ?? detected)
-        return mode == .extractedArticle ? .fullPage : mode
+        if chosen != .automatic { return chosen }
+        if let siteRule { return siteRule }
+        return detected == .fullPage ? .extractedArticle : detected
     }
 
     /// Whether an item's own HTML is worth reading on its own: long enough

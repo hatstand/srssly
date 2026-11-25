@@ -99,7 +99,7 @@ struct ArticlePager: View {
     }
 }
 
-/// Reads one article: the saved page when there is one, else the feed's
+/// Reads one article: the saved article or page when there is one, else the feed's
 /// content (with hover text and any extra images from site rules), all from
 /// the offline cache where possible. `showingWebPage` shows the live site.
 struct ArticleReaderView: View {
@@ -131,13 +131,27 @@ struct ArticleReaderView: View {
             html: article.contentHTML ?? article.summaryHTML,
             extraImages: article.extraImages, showsImageTitles: rule?.showsImageTitles ?? false
         )
+        let extracts = CacheModeDetector.effectiveMode(
+            subscription?.cacheMode ?? .automatic, siteRule: rule?.cacheMode, detected: .extractedArticle
+        ) != .fullPage
         return await Task.detached(priority: .userInitiated) {
             let lookup: ReaderDocument.CacheLookup = { url in
                 guard let cache, cache.hasResource(url) else { return nil }
                 return OfflineFileName.resource(url)
             }
             if let savedPage, let link {
-                return .html(ReaderDocument.savedPage(String(decoding: savedPage, as: UTF8.self), pageURL: link, cached: lookup), base: link)
+                let page = String(decoding: savedPage, as: UTF8.self)
+                // An extracted article, or a whole page saved before
+                // extraction existed (or for a feed not set to Full Page)
+                // that can be extracted now, reads in the reader's style.
+                let article = ArticleExtractor.fragment(fromSavedPage: page)
+                    ?? (extracts ? ArticleExtractor.extract(page, pageURL: link)?.html : nil)
+                if let article {
+                    var extracted = item
+                    extracted.html = article
+                    return .html(ReaderDocument.feedContent(extracted, cached: lookup), base: link)
+                }
+                return .html(ReaderDocument.savedPage(page, pageURL: link, cached: lookup), base: link)
             }
             return .html(ReaderDocument.feedContent(item, cached: lookup), base: link)
         }.value

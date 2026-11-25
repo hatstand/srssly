@@ -100,9 +100,9 @@ import Testing
         #expect(CacheModeDetector.detect([ParsedItem(link: link, contentHTML: body)]) == .feedContent)
     }
 
-    @Test func teasersNeedTheFullPage() {
+    @Test func teasersNeedTheArticleFromThePage() {
         let items = (0..<4).map { ParsedItem(guid: "\($0)", link: link, summaryHTML: "A new comic is up! <a href=\"x\">Read more</a>") }
-        #expect(CacheModeDetector.detect(items) == .fullPage)
+        #expect(CacheModeDetector.detect(items) == .extractedArticle)
     }
 
     @Test func itemsWithoutLinksHaveNothingToFetch() {
@@ -116,9 +116,15 @@ import Testing
     }
 
     @Test func effectiveModeHonoursTheSubscription() {
-        #expect(CacheModeDetector.effectiveMode(.automatic, detected: .fullPage) == .fullPage)
-        #expect(CacheModeDetector.effectiveMode(.feedContent, detected: .fullPage) == .feedContent)
-        #expect(CacheModeDetector.effectiveMode(.extractedArticle, detected: .feedContent) == .fullPage)
+        #expect(CacheModeDetector.effectiveMode(.automatic, detected: .extractedArticle) == .extractedArticle)
+        #expect(CacheModeDetector.effectiveMode(.feedContent, detected: .extractedArticle) == .feedContent)
+        #expect(CacheModeDetector.effectiveMode(.extractedArticle, detected: .feedContent) == .extractedArticle)
+        #expect(CacheModeDetector.effectiveMode(.fullPage, detected: .feedContent) == .fullPage)
+        #expect(CacheModeDetector.effectiveMode(.automatic, siteRule: .fullPage, detected: .extractedArticle) == .fullPage)
+    }
+
+    @Test func fullPageDetectedBeforeExtractionExistedMeansExtract() {
+        #expect(CacheModeDetector.effectiveMode(.automatic, detected: .fullPage) == .extractedArticle)
     }
 }
 
@@ -163,6 +169,6 @@ import Testing
     @Test func siteRuleSitsBetweenSubscriptionAndDetection() {
         #expect(CacheModeDetector.effectiveMode(.automatic, siteRule: .fullPage, detected: .feedContent) == .fullPage)
         #expect(CacheModeDetector.effectiveMode(.feedContent, siteRule: .fullPage, detected: .feedContent) == .feedContent)
-        #expect(CacheModeDetector.effectiveMode(.automatic, siteRule: nil, detected: .fullPage) == .fullPage)
+        #expect(CacheModeDetector.effectiveMode(.automatic, siteRule: nil, detected: .extractedArticle) == .extractedArticle)
     }
 }
