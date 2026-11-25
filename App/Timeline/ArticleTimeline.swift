@@ -56,10 +56,11 @@ struct ArticleTimeline: View {
             case .starred: starred.contains(article.key)
             }
         }
+        let shownKeys = shown.map(\.key)
         List(shown) { article in
             let isRead = read.contains(article.key)
             let isStarred = starred.contains(article.key)
-            NavigationLink(value: article) {
+            NavigationLink(value: ReaderRoute(keys: shownKeys, start: article.key)) {
                 TimelineRow(
                     article: article,
                     feedTitle: titles[article.subscriptionID] ?? "",
