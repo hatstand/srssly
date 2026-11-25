@@ -2,7 +2,7 @@ import Foundation
 import SwiftSoup
 
 /// An image referenced from HTML.
-public struct ImageReference: Sendable, Hashable {
+public struct ImageReference: Sendable, Hashable, Codable {
     public var url: URL
     public var alt: String?
     /// The `title` attribute: the hover text on comics such as xkcd.

@@ -21,12 +21,12 @@ public enum CacheModeDetector {
         return complete * 2 >= linked.count ? .feedContent : .fullPage
     }
 
-    /// The mode to use for an item: the subscription's choice, or one
-    /// detected from the feed when that is automatic.
+    /// The mode to use for an item: the subscription's choice; when that is
+    /// automatic, a site rule's mode; else the mode detected from the feed.
     ///
     /// `.extractedArticle` is not implemented yet and is kept as a full page.
-    public static func effectiveMode(_ chosen: CacheMode, detected: CacheMode) -> CacheMode {
-        let mode = chosen == .automatic ? detected : chosen
+    public static func effectiveMode(_ chosen: CacheMode, siteRule: CacheMode? = nil, detected: CacheMode) -> CacheMode {
+        let mode = chosen != .automatic ? chosen : (siteRule ?? detected)
         return mode == .extractedArticle ? .fullPage : mode
     }
 

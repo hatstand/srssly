@@ -133,3 +133,36 @@ import Testing
         #expect(OfflineFileName.page(articleKey: "k:1").hasSuffix(".html"))
     }
 }
+
+@Suite struct SiteRulesTests {
+    @Test func matchesHostsAndSubdomains() {
+        let rule = SiteRules.rule(article: URL(string: "https://www.smbc-comics.com/comic/2026-11-24"), feed: nil)
+        #expect(rule?.name == "SMBC")
+        #expect(SiteRules.rule(article: URL(string: "https://what-if.xkcd.com/1/"), feed: nil)?.name == "xkcd")
+        #expect(SiteRules.rule(article: URL(string: "https://notxkcd.com/1"), feed: nil) == nil)
+        #expect(SiteRules.rule(article: nil, feed: URL(string: "https://www.lfg.co/feed"))?.cacheMode == .fullPage)
+        #expect(SiteRules.rule(article: URL(string: "https://example.test/"), feed: URL(string: "https://example.test/rss")) == nil)
+    }
+
+    @Test func findsSMBCComicHoverTextAndBonusPanel() throws {
+        let html = """
+        <div id="cc-comicbody"><img title="The hover text." src="https://www.smbc-comics.com/comics/1764000000-20261124.png" id="cc-comic" /></div>
+        <div id="aftercomic" onclick='toggleBlock("aftercomic")' style="display:none;" class="mobilehide">
+          <img src='/comics/1764000000-20261124after.png'>
+        </div>
+        <img src="/images/ad.png">
+        """
+        let rule = try #require(SiteRules.builtIn.first { $0.name == "SMBC" })
+        let images = SiteRules.pageImages(html, pageURL: URL(string: "https://www.smbc-comics.com/comic/today")!, selectors: rule.pageImageSelectors)
+        #expect(images == [
+            ImageReference(url: URL(string: "https://www.smbc-comics.com/comics/1764000000-20261124.png")!, title: "The hover text."),
+            ImageReference(url: URL(string: "https://www.smbc-comics.com/comics/1764000000-20261124after.png")!),
+        ])
+    }
+
+    @Test func siteRuleSitsBetweenSubscriptionAndDetection() {
+        #expect(CacheModeDetector.effectiveMode(.automatic, siteRule: .fullPage, detected: .feedContent) == .fullPage)
+        #expect(CacheModeDetector.effectiveMode(.feedContent, siteRule: .fullPage, detected: .feedContent) == .feedContent)
+        #expect(CacheModeDetector.effectiveMode(.automatic, siteRule: nil, detected: .fullPage) == .fullPage)
+    }
+}

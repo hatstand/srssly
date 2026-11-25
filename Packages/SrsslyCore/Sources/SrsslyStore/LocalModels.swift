@@ -36,6 +36,15 @@ public final class Article {
     /// article uses. Files can be shared between articles.
     public var offlineResources: [String] = []
     public var offlineBytes: Int = 0
+    /// Images a site rule found on the page that the feed leaves out (e.g.
+    /// SMBC's bonus panel), as JSON `[ImageReference]`. Use `extraImages`.
+    public var extraImagesData: Data?
+
+    /// Images to show after the feed's content, with their hover text.
+    public var extraImages: [ImageReference] {
+        get { extraImagesData.flatMap { try? JSONDecoder().decode([ImageReference].self, from: $0) } ?? [] }
+        set { extraImagesData = newValue.isEmpty ? nil : try? JSONEncoder().encode(newValue) }
+    }
 
     public init(
         key: String,

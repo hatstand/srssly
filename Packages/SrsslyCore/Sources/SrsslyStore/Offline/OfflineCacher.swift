@@ -96,12 +96,15 @@ public actor OfflineCacher: ModelActor {
         var mode: CacheMode
         var link: URL?
         var feedHTML: String?
+        /// Page images to fetch beyond the feed's, from a site rule.
+        var pageImageSelectors: [String] = []
     }
 
     struct JobResult: Sendable {
         var key: String
         var pageFile: String?
         var resources: [String] = []
+        var extraImages: [ImageReference] = []
         var bytes = 0
         var error: String?
         var networkUnavailable = false
@@ -160,8 +163,8 @@ public actor OfflineCacher: ModelActor {
         let articles = try modelContext.fetch(descriptor)
         guard !articles.isEmpty else { return [] }
 
-        let chosen = Dictionary(
-            try modelContext.fetch(FetchDescriptor<Subscription>()).map { ($0.id, $0.cacheMode) },
+        let subscriptions = Dictionary(
+            try modelContext.fetch(FetchDescriptor<Subscription>()).map { ($0.id, (mode: $0.cacheMode, feed: $0.feedURL)) },
             uniquingKeysWith: { a, _ in a }
         )
         let detected = Dictionary(
@@ -170,13 +173,15 @@ public actor OfflineCacher: ModelActor {
         )
         return articles.compactMap { article in
             // Articles whose subscription was removed are left alone.
-            guard let mode = chosen[article.subscriptionID] else { return nil }
+            guard let sub = subscriptions[article.subscriptionID] else { return nil }
             let detectedMode = detected[article.subscriptionID].flatMap { $0 } ?? .feedContent
+            let rule = SiteRules.rule(article: article.link, feed: sub.feed)
             return Job(
                 key: article.key,
-                mode: CacheModeDetector.effectiveMode(mode, detected: detectedMode),
+                mode: CacheModeDetector.effectiveMode(sub.mode, siteRule: rule?.cacheMode, detected: detectedMode),
                 link: article.link,
-                feedHTML: article.contentHTML ?? article.summaryHTML
+                feedHTML: article.contentHTML ?? article.summaryHTML,
+                pageImageSelectors: rule?.pageImageSelectors ?? []
             )
         }
     }
@@ -189,13 +194,18 @@ public actor OfflineCacher: ModelActor {
         var result = JobResult(key: job.key)
         var urls: [URL] = []
 
-        if job.mode == .fullPage, let link = job.link {
+        let needsPage = job.mode == .fullPage || !job.pageImageSelectors.isEmpty
+        if needsPage, let link = job.link {
             do throws(ResourceFetchError) {
                 let page = try await fetcher.fetch(link, allowsCellular: allowsCellular)
-                result.pageFile = try? cache.storePage(page.data, articleKey: job.key)
-                result.bytes += page.data.count
                 let html = String(decoding: page.data, as: UTF8.self)
-                urls += HTMLResources.scan(html, baseURL: page.finalURL).downloadURLs
+                if job.mode == .fullPage {
+                    result.pageFile = try? cache.storePage(page.data, articleKey: job.key)
+                    result.bytes += page.data.count
+                    urls += HTMLResources.scan(html, baseURL: page.finalURL).downloadURLs
+                }
+                result.extraImages = SiteRules.pageImages(html, pageURL: page.finalURL, selectors: job.pageImageSelectors)
+                urls += result.extraImages.map(\.url)
             } catch .networkUnavailable {
                 result.networkUnavailable = true
                 return result
@@ -245,6 +255,7 @@ public actor OfflineCacher: ModelActor {
             article.offlinePageFile = result.pageFile
             article.offlineResources = result.resources
             article.offlineBytes = result.bytes
+            article.extraImages = result.extraImages
             summary.cached += 1
             summary.bytes += result.bytes
         }
