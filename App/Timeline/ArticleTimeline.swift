@@ -23,22 +23,26 @@ enum TimelineFilter: String, CaseIterable, Identifiable {
     }
 }
 
-/// Newest articles across all subscriptions.
+/// Newest articles across all subscriptions, or from one.
 struct ArticleTimeline: View {
     let subscriptions: [Subscription]
 
-    @Query(Self.descriptor) private var articles: [Article]
+    @Query private var articles: [Article]
     /// Only touched articles have a state, so this stays small.
     @Query private var states: [ArticleState]
     @Environment(\.feedRefresher) private var refresher
     @Environment(\.modelContext) private var context
     @AppStorage("timelineFilter") private var filter: TimelineFilter = .all
 
-    /// Capped so the first frame never has to load the whole history.
-    private static var descriptor: FetchDescriptor<Article> {
-        var d = FetchDescriptor<Article>(sortBy: [SortDescriptor(\.publishedAt, order: .reverse)])
+    init(subscriptions: [Subscription], only subscriptionID: UUID? = nil) {
+        self.subscriptions = subscriptions
+        var d = FetchDescriptor<Article>(
+            predicate: subscriptionID.map { id in #Predicate<Article> { $0.subscriptionID == id } },
+            sortBy: [SortDescriptor(\.publishedAt, order: .reverse)]
+        )
+        // Capped so the first frame never has to load the whole history.
         d.fetchLimit = 500
-        return d
+        _articles = Query(d)
     }
 
     var body: some View {
@@ -78,9 +82,6 @@ struct ArticleTimeline: View {
             }
         }
         .listStyle(.plain)
-        .navigationDestination(for: Article.self) { article in
-            ArticleReaderView(article: article, subscription: subscriptions.first { $0.id == article.subscriptionID })
-        }
         .refreshable { await refresher?.refresh(force: true) }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {

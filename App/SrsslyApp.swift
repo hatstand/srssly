@@ -40,6 +40,7 @@ struct SrsslyApp: App {
             ContentView()
                 .environment(\.feedRefresher, refresher)
                 .environment(\.offlineCacher, offlineCacher)
+                .environment(\.cloudSync, cloudSync)
                 .task { await cloudSync?.start() }
         }
         .modelContainer(container)
@@ -91,4 +92,5 @@ struct SrsslyApp: App {
 extension EnvironmentValues {
     @Entry var feedRefresher: FeedRefresher? = nil
     @Entry var offlineCacher: OfflineCacher? = nil
+    @Entry var cloudSync: CloudSync? = nil
 }
