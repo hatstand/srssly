@@ -131,6 +131,10 @@ public enum ReaderDocument {
             if try doc.select("meta[name=viewport]").isEmpty() {
                 try doc.head()?.appendElement("meta").attr("name", "viewport").attr("content", "width=device-width, initial-scale=1")
             }
+            // Last, so it wins: whatever the site's CSS does (or if it never
+            // loaded), keep the page to the screen's width so swiping
+            // sideways moves between articles rather than across the page.
+            try doc.head()?.appendElement("style").attr("id", "srssly-fit").append(fitToWidthCSS)
             return try doc.outerHtml()
         } catch {
             return (try? doc.outerHtml()) ?? html
@@ -178,6 +182,13 @@ public enum ReaderDocument {
         return s
     }
 
+    static let fitToWidthCSS = """
+    html, body { max-width: 100% !important; overflow-x: hidden !important; }
+    img, video, iframe, svg, canvas, table, pre { max-width: 100% !important; }
+    img, video { height: auto !important; }
+    pre { overflow-x: auto; }
+    """
+
     static let css = """
     :root { color-scheme: light dark; }
     body { font: -apple-system-body; line-height: 1.5; margin: 0 auto; max-width: 42em;
@@ -188,7 +199,17 @@ public enum ReaderDocument {
     figure { margin: 1em 0; }
     .srssly-hover-text, figcaption { font: -apple-system-footnote; font-style: italic; color: #8e8e93;
            margin: 0.4em 0 1.4em; }
-    pre { overflow-x: auto; }
+    html, body { overflow-x: hidden; }
+    a { color: -apple-system-blue; }
+    h2, h3, h4 { line-height: 1.25; margin: 1.4em 0 0.5em; }
+    h2 { font-size: 1.35em; } h3 { font-size: 1.15em; } h4 { font-size: 1em; }
+    pre, code { font-family: ui-monospace, Menlo, monospace; font-size: 0.875em; }
+    pre { overflow-x: auto; padding: 0.8em; border-radius: 8px; background: #8e8e931f; }
+    :not(pre) > code { padding: 0.1em 0.3em; border-radius: 4px; background: #8e8e931f; }
+    table { display: block; overflow-x: auto; border-collapse: collapse; }
+    td, th { padding: 0.3em 0.6em; border: 1px solid #8e8e9344; }
+    hr { border: 0; border-top: 1px solid #8e8e9366; margin: 2em 0; }
+    img { border-radius: 6px; }
     blockquote { margin-left: 0; padding-left: 1em; border-left: 3px solid #8e8e9366; }
     """
 }

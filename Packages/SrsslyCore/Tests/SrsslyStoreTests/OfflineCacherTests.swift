@@ -96,7 +96,7 @@ actor StubResourceFetcher: ResourceFetching {
     }
 
     @Test func fullPageSavesThePageAndItsImages() async throws {
-        let sub = try subscription("https://news.test/rss", detected: .fullPage)
+        let sub = try subscription("https://news.test/rss", mode: .fullPage)
         let a = try article(sub, "1", link: "https://news.test/story", html: "Teaser")
         await fetcher.set("https://news.test/story", html: #"<link rel="stylesheet" href="/s.css"><img src="hero.jpg">"#)
         await fetcher.set("https://news.test/hero.jpg", bytes: 50)
@@ -110,6 +110,44 @@ actor StubResourceFetcher: ResourceFetching {
         #expect(cache.page(named: page).map { String(decoding: $0, as: UTF8.self) }?.contains("hero.jpg") == true)
         #expect(saved.offlineResources.count == 2)
         #expect(await fetcher.cellularFlags().allSatisfy { $0 })
+    }
+
+    @Test func summaryFeedsSaveTheExtractedArticleAndOnlyItsImages() async throws {
+        let sub = try subscription("https://news.test/rss", detected: .extractedArticle)
+        let a = try article(sub, "1", link: "https://news.test/story", html: "Teaser")
+        let paragraph = "<p>" + String(repeating: "The story goes on, and on, and on. ", count: 8) + "</p>"
+        await fetcher.set("https://news.test/story", html: """
+            <html><head><link rel="stylesheet" href="/s.css"></head><body>
+            <nav><a href="/">Home</a><img src="/logo.png"></nav>
+            <div class="post-content">\(paragraph)<img src="/figure.jpg">\(paragraph)</div>
+            <div class="sidebar"><img src="/ad.png"></div>
+            </body></html>
+            """)
+        await fetcher.set("https://news.test/figure.jpg", bytes: 50)
+
+        let summary = await makeCacher().run(allowsCellular: false, now: now)
+
+        #expect(summary.cached == 1)
+        #expect(await fetcher.requested().map(\.lastPathComponent) == ["story", "figure.jpg"])
+        let saved = try stored(a.key)
+        let page = try #require(saved.offlinePageFile.flatMap { cache.page(named: $0) }.map { String(decoding: $0, as: UTF8.self) })
+        let fragment = try #require(ArticleExtractor.fragment(fromSavedPage: page))
+        #expect(fragment.contains("The story goes on"))
+        #expect(!fragment.contains("Home"))
+        #expect(saved.offlineResources == [OfflineFileName.resource(URL(string: "https://news.test/figure.jpg")!)])
+    }
+
+    @Test func pagesWithoutAnArticleAreSavedWhole() async throws {
+        let sub = try subscription("https://news.test/rss", detected: .extractedArticle)
+        let a = try article(sub, "1", link: "https://news.test/app")
+        await fetcher.set("https://news.test/app", html: #"<link rel="stylesheet" href="/s.css"><div id="root">Loading…</div>"#)
+        await fetcher.set("https://news.test/s.css", bytes: 10)
+
+        await makeCacher().run(allowsCellular: false, now: now)
+
+        let page = try #require(try stored(a.key).offlinePageFile.flatMap { cache.page(named: $0) })
+        #expect(ArticleExtractor.fragment(fromSavedPage: String(decoding: page, as: UTF8.self)) == nil)
+        #expect(cache.hasResource(URL(string: "https://news.test/s.css")!))
     }
 
     @Test func subscriptionChoiceOverridesDetection() async throws {
@@ -273,6 +311,6 @@ actor StubResourceFetcher: ResourceFetching {
         await FeedRefresher(container: container, fetcher: fetcher).refresh()
 
         let state = try #require(try ModelContext(container).fetch(FetchDescriptor<FeedFetchState>()).first)
-        #expect(state.detectedCacheMode == .fullPage)
+        #expect(state.detectedCacheMode == .extractedArticle)
     }
 }

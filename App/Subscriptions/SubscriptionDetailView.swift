@@ -39,12 +39,13 @@ struct SubscriptionDetailView: View {
                 Picker("Save for Offline", selection: cacheMode) {
                     Text(automaticLabel).tag(CacheMode.automatic)
                     Text("Feed Content").tag(CacheMode.feedContent)
+                    Text("Article").tag(CacheMode.extractedArticle)
                     Text("Full Page").tag(CacheMode.fullPage)
                 }
             } header: {
                 Text("Offline Reading")
             } footer: {
-                Text("Feed Content keeps what the feed sends, with its images. Full Page also saves the linked web page, for feeds that only send a summary.")
+                Text("Feed Content keeps what the feed sends, with its images. Article saves the article from the linked web page, for feeds that only send a summary. Full Page keeps the whole web page as the site shows it.")
             }
             Section("Status") {
                 if let url = subscription.feedURL {
@@ -75,13 +76,18 @@ struct SubscriptionDetailView: View {
     private var automaticLabel: String {
         let rule = SiteRules.rule(article: subscription.siteURL, feed: subscription.feedURL)
         let detected = CacheModeDetector.effectiveMode(.automatic, siteRule: rule?.cacheMode, detected: fetchState?.detectedCacheMode ?? .feedContent)
-        return "Automatic (\(detected == .fullPage ? "Full Page" : "Feed Content"))"
+        let name = switch detected {
+        case .fullPage: "Full Page"
+        case .extractedArticle: "Article"
+        default: "Feed Content"
+        }
+        return "Automatic (\(name))"
     }
 
     /// The cacheMode setter bumps modifiedAt, so the change syncs.
     private var cacheMode: Binding<CacheMode> {
         Binding(
-            get: { subscription.cacheMode == .extractedArticle ? .fullPage : subscription.cacheMode },
+            get: { subscription.cacheMode },
             set: { subscription.cacheMode = $0; try? context.save() }
         )
     }

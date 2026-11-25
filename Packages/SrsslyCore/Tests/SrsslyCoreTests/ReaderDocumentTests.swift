@@ -77,6 +77,14 @@ import Testing
         #expect(try doc.select("a").attr("href") == "")
     }
 
+    @Test func savedPagesAreKeptToTheScreenWidth() throws {
+        let html = #"<html><head><link rel="stylesheet" href="/site.css"></head><body><img src="/hero.png" width="4608"></body></html>"#
+        let doc = try parse(ReaderDocument.savedPage(html, pageURL: link, cached: noCache))
+        let style = try #require(try doc.select("head > style#srssly-fit").first())
+        #expect(try style.data().contains("max-width: 100%"))
+        #expect(doc.head()?.children().last() === style, "after the site's own CSS, so it wins")
+    }
+
     @Test func savedPagesUseCachedStylesheetsAndImages() throws {
         let page = URL(string: "https://news.test/story")!
         let cached: ReaderDocument.CacheLookup = { url in

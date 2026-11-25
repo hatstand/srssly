@@ -39,6 +39,8 @@ public struct OfflineCacheSummary: Sendable, Equatable {
 /// For each article it works out the cache mode (the subscription's choice,
 /// else what `CacheModeDetector` saw in the feed):
 ///  - `.feedContent`: the images in the feed's own HTML.
+///  - `.extractedArticle`: the article extracted from the linked page and
+///    its images (or the whole page, if no article was found).
 ///  - `.fullPage`: the linked page, plus the images and stylesheets it uses
 ///    and those in the feed's HTML.
 ///
@@ -194,15 +196,30 @@ public actor OfflineCacher: ModelActor {
         var result = JobResult(key: job.key)
         var urls: [URL] = []
 
-        let needsPage = job.mode == .fullPage || !job.pageImageSelectors.isEmpty
+        let needsPage = job.mode == .fullPage || job.mode == .extractedArticle || !job.pageImageSelectors.isEmpty
         if needsPage, let link = job.link {
             do throws(ResourceFetchError) {
                 let page = try await fetcher.fetch(link, allowsCellular: allowsCellular)
                 let html = String(decoding: page.data, as: UTF8.self)
-                if job.mode == .fullPage {
+                var saveWholePage = job.mode == .fullPage
+                if job.mode == .extractedArticle {
+                    if let article = ArticleExtractor.extract(html, pageURL: page.finalURL) {
+                        let data = ArticleExtractor.savedPage(article)
+                        result.pageFile = try? cache.storePage(data, articleKey: job.key)
+                        result.bytes += data.count
+                        urls += HTMLResources.scan(article.html, baseURL: page.finalURL).downloadURLs
+                    } else {
+                        // Nothing looked like an article: keep the page.
+                        saveWholePage = true
+                    }
+                }
+                if saveWholePage {
                     result.pageFile = try? cache.storePage(page.data, articleKey: job.key)
                     result.bytes += page.data.count
-                    urls += HTMLResources.scan(html, baseURL: page.finalURL).downloadURLs
+                    // Stylesheets first: a page with many images would
+                    // otherwise use up the resource limit before them.
+                    let resources = HTMLResources.scan(html, baseURL: page.finalURL)
+                    urls += resources.stylesheets + resources.images.map(\.url)
                 }
                 result.extraImages = SiteRules.pageImages(html, pageURL: page.finalURL, selectors: job.pageImageSelectors)
                 urls += result.extraImages.map(\.url)
