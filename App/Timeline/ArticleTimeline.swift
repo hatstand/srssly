@@ -21,13 +21,19 @@ struct ArticleTimeline: View {
         let titles = Dictionary(subscriptions.map { ($0.id, $0.title) }, uniquingKeysWith: { a, _ in a })
         let read = Set(readStates.map(\.articleKey))
         List(articles) { article in
-            TimelineRow(
-                article: article,
-                feedTitle: titles[article.subscriptionID] ?? "",
-                isRead: read.contains(article.key)
-            )
+            NavigationLink(value: article) {
+                TimelineRow(
+                    article: article,
+                    feedTitle: titles[article.subscriptionID] ?? "",
+                    isRead: read.contains(article.key)
+                )
+            }
+            .accessibilityIdentifier("article-row")
         }
         .listStyle(.plain)
+        .navigationDestination(for: Article.self) { article in
+            ArticleReaderView(article: article, subscription: subscriptions.first { $0.id == article.subscriptionID })
+        }
         .refreshable { await refresher?.refresh(force: true) }
         .overlay {
             if articles.isEmpty {
@@ -63,6 +69,5 @@ struct TimelineRow: View {
             }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("article-row")
     }
 }
