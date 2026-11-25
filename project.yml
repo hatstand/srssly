@@ -44,6 +44,8 @@ targets:
         # Merged with the generated Info.plist; holds keys with no build setting.
         INFOPLIST_FILE: App/Info.plist
         INFOPLIST_KEY_CFBundleDisplayName: Srssly
+        # Single-size 1024px icon (light + dark) in App/Assets.xcassets; light and dark source art is in design/.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # iOS requires a launch screen. An empty generated one is just the
         # system background colour, so there is no splash: the first frame
         # of real UI replaces it as soon as it is drawn.
