@@ -12,6 +12,7 @@ struct ContentView: View {
     @Environment(\.offlineCacher) private var offlineCacher
     @Environment(\.modelContext) private var context
     @State private var showingSettings = false
+    @State private var openedFileMessage: String?
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -45,6 +46,17 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showingSettings) { SettingsView() }
         .onAppear { LaunchMetrics.firstContentAppeared() }
+        // An OPML file opened from Files, Google Drive or the share sheet.
+        .onOpenURL { url in
+            guard url.isFileURL else { return }
+            openedFileMessage = OPMLFileImport.run(url, context: context, refresher: refresher)
+        }
+        .alert(
+            openedFileMessage ?? "",
+            isPresented: Binding(get: { openedFileMessage != nil }, set: { if !$0 { openedFileMessage = nil } })
+        ) {
+            Button("OK", role: .cancel) {}
+        }
         // Refresh after the first frame, and again on returning to the app.
         // The policy skips feeds fetched in the last few minutes.
         .task(id: scenePhase) {

@@ -16,9 +16,7 @@ struct AddFeedsButton: View {
     @State private var showingImporter = false
     @State private var message: String?
 
-    private static let opmlTypes: [UTType] = [
-        UTType(filenameExtension: "opml") ?? .xml, .xml,
-    ]
+    private static let opmlTypes: [UTType] = [.opml, .xml]
 
     var body: some View {
         Menu {
@@ -60,15 +58,7 @@ struct AddFeedsButton: View {
 
     private func importOPML(_ result: Result<URL, Error>) {
         do {
-            let url = try result.get()
-            let accessing = url.startAccessingSecurityScopedResource()
-            defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-            let feeds = try OPML.parse(try Data(contentsOf: url))
-            let summary = try SubscriptionImporter.add(feeds, to: context)
-            message = summary.duplicates > 0
-                ? "Added \(summary.added) feeds. \(summary.duplicates) were already subscribed."
-                : "Added \(summary.added) feeds."
-            refreshSoon()
+            message = try OPMLFileImport.run(result.get(), context: context, refresher: refresher)
         } catch {
             message = "Couldn't import that file: \(error.localizedDescription)"
         }
@@ -77,5 +67,45 @@ struct AddFeedsButton: View {
     private func refreshSoon() {
         guard let refresher else { return }
         Task { await refresher.refresh() }
+    }
+}
+
+extension UTType {
+    /// OPML subscription lists, declared in Info.plist so the app shows up
+    /// for .opml files in Files, Drive and the share sheet.
+    static let opml = UTType(importedAs: "org.opml.opml", conformingTo: .xml)
+}
+
+/// Subscribes to the feeds in an OPML file, whether picked in the app or
+/// opened from another app (Files, Google Drive, the share sheet).
+@MainActor
+enum OPMLFileImport {
+    /// Imports `url` and returns a message saying what happened.
+    static func run(_ url: URL, context: ModelContext, refresher: FeedRefresher?) -> String {
+        do {
+            let feeds = try OPML.parse(try read(url))
+            let summary = try SubscriptionImporter.add(feeds, to: context)
+            if let refresher { Task { await refresher.refresh() } }
+            return summary.duplicates > 0
+                ? "Added \(summary.added) feeds. \(summary.duplicates) were already subscribed."
+                : "Added \(summary.added) feeds."
+        } catch {
+            return "Couldn't import that file: \(error.localizedDescription)"
+        }
+    }
+
+    /// Reads a file that may belong to another app or a cloud provider:
+    /// asks for access, and coordinates so a not-yet-downloaded file is
+    /// fetched first.
+    private static func read(_ url: URL) throws -> Data {
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        var coordinationError: NSError?
+        var result: Result<Data, Error> = .failure(CocoaError(.fileReadUnknown))
+        NSFileCoordinator().coordinate(readingItemAt: url, options: .withoutChanges, error: &coordinationError) { readURL in
+            result = Result { try Data(contentsOf: readURL) }
+        }
+        if let coordinationError { throw coordinationError }
+        return try result.get()
     }
 }
