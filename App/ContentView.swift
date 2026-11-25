@@ -10,6 +10,7 @@ struct ContentView: View {
 
     @Environment(\.feedRefresher) private var refresher
     @Environment(\.offlineCacher) private var offlineCacher
+    @Environment(\.modelContext) private var context
     @State private var showingSettings = false
     @Environment(\.scenePhase) private var scenePhase
 
@@ -27,10 +28,18 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("Srssly")
+            // Registered once here, for the timeline and per-feed lists.
+            .navigationDestination(for: Article.self) { article in
+                ArticleReaderView(article: article, subscription: subscriptions.first { $0.id == article.subscriptionID })
+            }
+            .navigationDestination(for: Subscription.self) { SubscriptionDetailView(subscription: $0) }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) { AddFeedsButton() }
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItemGroup(placement: .topBarLeading) {
                     Button("Settings", systemImage: "gearshape") { showingSettings = true }
+                    NavigationLink { SubscriptionsView() } label: {
+                        Label("Subscriptions", systemImage: "list.bullet")
+                    }
                 }
             }
         }
@@ -44,6 +53,9 @@ struct ContentView: View {
             // Then save new articles for offline reading, newest first. Wi-Fi
             // only unless mobile data is allowed in Settings.
             await offlineCacher?.run(allowsCellular: OfflineSettings.allowsCellular)
+            // Drop articles of feeds unsubscribed on another device, then
+            // the offline files only they used.
+            try? SubscriptionCleanup.removeOrphans(in: context)
             await offlineCacher?.prune()
         }
     }
