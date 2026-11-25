@@ -30,9 +30,7 @@ struct ContentView: View {
             }
             .navigationTitle("Srssly")
             // Registered once here, for the timeline and per-feed lists.
-            .navigationDestination(for: Article.self) { article in
-                ArticleReaderView(article: article, subscription: subscriptions.first { $0.id == article.subscriptionID })
-            }
+            .navigationDestination(for: ReaderRoute.self) { ArticlePager(route: $0, subscriptions: subscriptions) }
             .navigationDestination(for: Subscription.self) { SubscriptionDetailView(subscription: $0) }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) { AddFeedsButton() }
