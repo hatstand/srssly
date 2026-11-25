@@ -24,4 +24,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: brew install xcodegen
       - run: xcodegen generate
+      # XcodeGen rewrites the entitlements; without iCloud the app crashes at launch.
+      - name: Check entitlements survived generation
+        run: git diff --exit-code App/Srssly.entitlements && grep -q iCloud.com.purplehatstands.srssly App/Srssly.entitlements
       - run: ./scripts/xcodebuild.sh test

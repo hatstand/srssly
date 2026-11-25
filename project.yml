@@ -27,8 +27,17 @@ targets:
     dependencies:
       - package: SrsslyCore
         products: [SrsslyCore, SrsslyStore]
+    # XcodeGen rewrites this file from `properties` on every run, so the
+    # entitlements must live here: a bare `path` leaves it empty, and the app
+    # crashes at launch creating its CKContainer.
     entitlements:
       path: App/Srssly.entitlements
+      properties:
+        aps-environment: development
+        com.apple.developer.icloud-container-identifiers:
+          - iCloud.com.purplehatstands.srssly
+        com.apple.developer.icloud-services:
+          - CloudKit
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.purplehatstands.srssly
