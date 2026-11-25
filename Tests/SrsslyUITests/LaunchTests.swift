@@ -18,6 +18,19 @@ final class LaunchTests: XCTestCase {
         XCTAssertFalse(app.activityIndicators.firstMatch.exists, "Launch should never show a loading spinner")
     }
 
+    /// Tapping an article opens the reader.
+    @MainActor
+    func testOpeningAnArticleShowsTheReader() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-SrsslySampleData"]
+        app.launch()
+
+        let firstRow = app.descendants(matching: .any)["article-row"].firstMatch
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 5))
+        firstRow.tap()
+        XCTAssertTrue(app.webViews.firstMatch.waitForExistence(timeout: 5))
+    }
+
     /// Records launch time. Set a baseline in Xcode (Report navigator) to make
     /// this fail on regressions; on CI it just records.
     @MainActor

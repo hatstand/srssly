@@ -20,7 +20,7 @@ let package = Package(
     targets: [
         .target(name: "SrsslyCore", dependencies: ["SwiftSoup"]),
         .target(name: "SrsslyStore", dependencies: ["SrsslyCore"]),
-        .testTarget(name: "SrsslyCoreTests", dependencies: ["SrsslyCore"]),
+        .testTarget(name: "SrsslyCoreTests", dependencies: ["SrsslyCore", "SwiftSoup"]),
         .testTarget(name: "SrsslyStoreTests", dependencies: ["SrsslyStore"]),
     ]
 )
