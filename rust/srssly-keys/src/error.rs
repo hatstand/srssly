@@ -9,6 +9,9 @@ pub enum Error {
     /// Decryption failed: the data was tampered with or belongs to another account or epoch.
     #[error("decryption failed")]
     DecryptionFailed,
+    /// The recovery words are invalid.
+    #[error("invalid recovery key: {0}")]
+    InvalidRecoveryKey(String),
     /// The authenticator failed to produce a PRF output.
     #[error("authenticator error: {0}")]
     Authenticator(String),
@@ -23,6 +26,7 @@ impl Error {
         match self {
             Error::WrongPasskey => "wrong_passkey",
             Error::DecryptionFailed => "decryption_failed",
+            Error::InvalidRecoveryKey(_) => "invalid_recovery_key",
             Error::Authenticator(_) => "authenticator",
             Error::Malformed(_) => "malformed",
         }
