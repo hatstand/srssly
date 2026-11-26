@@ -12,6 +12,7 @@ import SwiftData
 /// `deleteSubscription(id:)` so the deletion can be sent too.
 public actor CloudSync: CKSyncEngineDelegate {
     private let container: ModelContainer
+    private let cloudContainerID: String
     private let database: CKDatabase
     private let stateURL: URL
     /// The CloudKit environment the saved state belongs to.
@@ -26,6 +27,7 @@ public actor CloudSync: CKSyncEngineDelegate {
 
     public init(container: ModelContainer, cloudContainerID: String, stateDirectory: URL) {
         self.container = container
+        self.cloudContainerID = cloudContainerID
         self.database = CKContainer(identifier: cloudContainerID).privateCloudDatabase
         self.stateURL = stateDirectory.appending(path: "CloudSyncState.json")
         self.environmentURL = stateDirectory.appending(path: "CloudSyncEnvironment")
@@ -43,6 +45,8 @@ public actor CloudSync: CKSyncEngineDelegate {
         // Sync state from before we recorded the environment came from
         // development builds: those were the only kind until TestFlight.
         let savedEnvironment = (try? String(contentsOf: environmentURL, encoding: .utf8)) ?? CloudEnvironment.development
+        let counts = localCounts()
+        log.notice("Starting sync: environment=\(environment, privacy: .public) savedEnvironment=\(savedEnvironment, privacy: .public) savedState=\(saved != nil, privacy: .public) subscriptions=\(counts.subscriptions, privacy: .public) (\(counts.syncedSubscriptions, privacy: .public) with system fields) articleStates=\(counts.states, privacy: .public) build=\(Self.build, privacy: .public)")
         if saved != nil, savedEnvironment != environment {
             // Development and production are separate databases, but a
             // TestFlight build installed over a development one keeps the
@@ -56,9 +60,33 @@ public actor CloudSync: CKSyncEngineDelegate {
         try? FileManager.default.createDirectory(at: environmentURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? environment.write(to: environmentURL, atomically: true, encoding: .utf8)
         startEngine(saved: saved)
+        await logAccount()
         // The engine fetches on its own only when a push arrives, and a push
         // sent while the app wasn't running can be missed, so catch up now.
         await syncNow()
+    }
+
+    private static var build: String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        return "\(info["CFBundleShortVersionString"] ?? "?")(\(info["CFBundleVersion"] ?? "?"))"
+    }
+
+    private func localCounts() -> (subscriptions: Int, syncedSubscriptions: Int, states: Int) {
+        let context = ModelContext(container)
+        let subs = (try? context.fetch(FetchDescriptor<Subscription>())) ?? []
+        let states = (try? context.fetchCount(FetchDescriptor<ArticleState>())) ?? -1
+        return (subs.count, subs.filter { $0.cloudKitSystemFields != nil }.count, states)
+    }
+
+    private func logAccount() async {
+        let container = CKContainer(identifier: cloudContainerID)
+        do {
+            let status = try await container.accountStatus()
+            let user = try? await container.userRecordID()
+            log.notice("iCloud account status=\(String(describing: status), privacy: .public) (raw \(status.rawValue, privacy: .public)) user=\(user.map(CloudSyncLog.short) ?? "unknown", privacy: .public)")
+        } catch {
+            log.error("iCloud account status failed: \(CloudSyncLog.code(error), privacy: .public)")
+        }
     }
 
     private func startEngine(saved: CKSyncEngine.State.Serialization?) {
@@ -79,10 +107,13 @@ public actor CloudSync: CKSyncEngineDelegate {
     public func syncNow() async {
         guard let engine else { return }
         do {
+            log.notice("syncNow: fetching")
             try await engine.fetchChanges()
+            log.notice("syncNow: sending; \(CloudSyncLog.pending(engine.state), privacy: .public)")
             try await engine.sendChanges()
+            log.notice("syncNow: done; \(CloudSyncLog.pending(engine.state), privacy: .public)")
         } catch {
-            log.error("Sync failed: \(error, privacy: .public)")
+            log.error("Sync failed: \(CloudSyncLog.code(error), privacy: .public)")
         }
     }
 
@@ -131,6 +162,7 @@ public actor CloudSync: CKSyncEngineDelegate {
             default: break
             }
         }
+        log.notice("Local save: \(ids.count, privacy: .public) models changed, \(changes.count, privacy: .public) synced records queued")
         if !changes.isEmpty { engine.state.add(pendingRecordZoneChanges: changes) }
     }
 
@@ -141,12 +173,18 @@ public actor CloudSync: CKSyncEngineDelegate {
         let states = (try? context.fetch(FetchDescriptor<ArticleState>())) ?? []
         let changes = subs.map { CKSyncEngine.PendingRecordZoneChange.saveRecord($0.cloudRecordID) }
             + states.map { .saveRecord($0.cloudRecordID) }
+        log.notice("Queued all local records: \(subs.count, privacy: .public) subscriptions, \(states.count, privacy: .public) article states")
         if !changes.isEmpty { engine.state.add(pendingRecordZoneChanges: changes) }
     }
 
     // MARK: - CKSyncEngineDelegate
 
     public func handleEvent(_ event: CKSyncEngine.Event, syncEngine: CKSyncEngine) async {
+        if case .stateUpdate = event {
+            log.debug("Event stateUpdate \(CloudSyncLog.pending(syncEngine.state), privacy: .public)")
+        } else {
+            log.notice("Event \(CloudSyncLog.describe(event), privacy: .public); \(CloudSyncLog.pending(syncEngine.state), privacy: .public)")
+        }
         switch event {
         case .stateUpdate(let update):
             saveState(update.stateSerialization)
@@ -182,8 +220,13 @@ public actor CloudSync: CKSyncEngineDelegate {
     ) async -> CKSyncEngine.RecordZoneChangeBatch? {
         let scope = context.options.scope
         let pending = syncEngine.state.pendingRecordZoneChanges.filter { scope.contains($0) }
-        guard !pending.isEmpty else { return nil }
+        guard !pending.isEmpty else {
+            log.notice("Next batch: nothing pending (reason \(String(describing: context.reason), privacy: .public))")
+            return nil
+        }
         let records = records(for: pending)
+        let saves = pending.filter { if case .saveRecord = $0 { true } else { false } }.count
+        log.notice("Next batch: \(pending.count, privacy: .public) pending, \(saves, privacy: .public) saves, \(records.count, privacy: .public) records built (\(saves - records.count, privacy: .public) dropped: no local model)")
         return await CKSyncEngine.RecordZoneChangeBatch(pendingChanges: pending) { id in
             records[id]
         }
@@ -212,24 +255,37 @@ public actor CloudSync: CKSyncEngineDelegate {
     func applyFetched(modifications: [CKRecord], deletions: [(CKRecord.ID, CKRecord.RecordType)]) {
         let context = applyContext
         var reupload: [CKRecord.ID] = []
+        var inserted = 0, merged = 0, unreadable: [String] = [], deleted = 0
         for record in modifications {
             let name = record.recordID.recordName
             switch record.recordType {
             case CloudSchema.RecordType.subscription:
-                guard let uuid = UUID(uuidString: name) else { continue }
+                guard let uuid = UUID(uuidString: name) else {
+                    unreadable.append("Subscription with non-UUID name \(name)")
+                    continue
+                }
                 if let local = try? context.fetch(FetchDescriptor<Subscription>(predicate: #Predicate { $0.id == uuid })).first {
                     // Field-level three-way merge; re-upload if we kept local edits.
                     if local.merge(record) { reupload.append(record.recordID) }
+                    merged += 1
                 } else if let sub = Subscription(record: record) {
                     context.insert(sub)
+                    inserted += 1
+                } else {
+                    unreadable.append("Subscription \(name) keys=\(record.allKeys().sorted())")
                 }
             case CloudSchema.RecordType.articleState:
                 if let local = try? context.fetch(FetchDescriptor<ArticleState>(predicate: #Predicate { $0.articleKey == name })).first {
                     if local.merge(record) { reupload.append(record.recordID) }
+                    merged += 1
                 } else if let state = ArticleState(record: record) {
                     context.insert(state)
+                    inserted += 1
+                } else {
+                    unreadable.append("ArticleState \(name) keys=\(record.allKeys().sorted())")
                 }
             default:
+                unreadable.append("unknown type \(record.recordType)")
                 continue
             }
         }
@@ -237,11 +293,16 @@ public actor CloudSync: CKSyncEngineDelegate {
             guard let uuid = UUID(uuidString: id.recordName) else { continue }
             let doomed = (try? context.fetch(FetchDescriptor<Subscription>(predicate: #Predicate { $0.id == uuid }))) ?? []
             doomed.forEach(context.delete)
+            deleted += doomed.count
         }
         do {
             try context.save()
+            log.notice("Applied fetched: \(modifications.count, privacy: .public) records, \(inserted, privacy: .public) inserted, \(merged, privacy: .public) merged, \(deleted, privacy: .public) subscriptions deleted, \(reupload.count, privacy: .public) to re-upload, \(unreadable.count, privacy: .public) unreadable")
         } catch {
             log.error("Applying fetched changes failed: \(error, privacy: .public)")
+        }
+        for problem in unreadable {
+            log.error("Couldn't read fetched record: \(problem, privacy: .public)")
         }
         if !reupload.isEmpty {
             engine?.state.add(pendingRecordZoneChanges: reupload.map { .saveRecord($0) })
