@@ -175,6 +175,47 @@ impl AccountKeys {
         Ok(root)
     }
 
+    /// Removes a passkey so it can no longer unlock the account. It does not
+    /// revoke a device that already unlocked the root secret; use
+    /// [`rotate`](Self::rotate) for that. Refuses to remove the last passkey.
+    pub fn remove_passkey(&mut self, credential_id_hash: &CredentialIdHash) -> Result<PasskeyInfo> {
+        let index = self
+            .passkeys
+            .iter()
+            .position(|p| &p.credential_id_hash == credential_id_hash)
+            .ok_or(Error::UnknownPasskey)?;
+        if self.passkeys.len() == 1 {
+            return Err(Error::LastPasskey);
+        }
+        Ok(self.passkeys.remove(index))
+    }
+
+    /// Replaces the root secret with a new one, sealed to every registered
+    /// passkey, and returns it. The old secret, any recovery key made from it,
+    /// and any device holding it no longer unlock the account. The caller must
+    /// re-encrypt synced records under the new keys.
+    pub fn rotate(&mut self, current: &RootSecret) -> Result<RootSecret> {
+        self.verify_root(current)?;
+        let root = RootSecret::generate();
+        let epoch = self.epoch.checked_add(1).ok_or(Error::Malformed("epoch"))?;
+        let mut next = Self::empty(self.account_id, epoch, &root);
+        for p in &self.passkeys {
+            let wrapped = WrappedSecret::seal(
+                &root,
+                &p.wrapped.public_key,
+                &self.account_id,
+                epoch,
+                &p.credential_id_hash,
+            )?;
+            next.passkeys.push(PasskeyInfo {
+                wrapped,
+                ..p.clone()
+            });
+        }
+        *self = next;
+        Ok(root)
+    }
+
     pub fn to_json(&self) -> String {
         serde_json::to_string_pretty(self).expect("AccountKeys always serializes")
     }
@@ -384,6 +425,76 @@ mod tests {
         let (keys, root) = AccountKeys::create(&pk, "a").unwrap();
         let back = AccountKeys::from_json(&keys.to_json()).unwrap();
         assert_eq!(back.unlock(&pk).unwrap(), root);
+    }
+
+    #[test]
+    fn remove_passkey() {
+        let a = SoftPasskey::generate();
+        let b = SoftPasskey::generate();
+        let (mut keys, root) = AccountKeys::create(&a, "a").unwrap();
+        keys.add_passkey(&root, &b, "b").unwrap();
+        let removed = keys
+            .remove_passkey(&CredentialIdHash::of(b.credential_id()))
+            .unwrap();
+        assert_eq!(removed.label, "b");
+        assert_eq!(keys.unlock(&b), Err(Error::UnknownPasskey));
+        assert_eq!(keys.unlock(&a).unwrap(), root);
+        assert_eq!(
+            keys.remove_passkey(&CredentialIdHash::of(a.credential_id())),
+            Err(Error::LastPasskey)
+        );
+        assert_eq!(
+            keys.remove_passkey(&CredentialIdHash::of(b"nope")),
+            Err(Error::UnknownPasskey)
+        );
+    }
+
+    #[test]
+    fn rotate_reseals_for_every_passkey_without_asking_them() {
+        let a = SoftPasskey::generate();
+        let b = SoftPasskey::generate();
+        let (mut keys, old) = AccountKeys::create(&a, "a").unwrap();
+        keys.add_passkey(&old, &b, "b").unwrap();
+        let before = keys.clone();
+
+        let new = keys.rotate(&old).unwrap();
+        assert_ne!(new, old);
+        assert_eq!(keys.epoch, 1);
+        assert_eq!(keys.account_id, before.account_id);
+        assert_ne!(keys.auth_public_key, before.auth_public_key);
+        assert_eq!(keys.unlock(&a).unwrap(), new);
+        assert_eq!(keys.unlock(&b).unwrap(), new);
+        assert_eq!(keys.verify_root(&old), Err(Error::WrongRootSecret));
+        assert_eq!(keys.rotate(&old), Err(Error::WrongRootSecret));
+        let labels: Vec<_> = keys.passkeys.iter().map(|p| p.label.as_str()).collect();
+        assert_eq!(labels, ["a", "b"]);
+    }
+
+    #[test]
+    fn old_wrapped_secrets_dont_open_at_new_epoch() {
+        let a = SoftPasskey::generate();
+        let (mut keys, old) = AccountKeys::create(&a, "a").unwrap();
+        let stale = keys.passkeys[0].clone();
+        keys.rotate(&old).unwrap();
+        keys.passkeys[0] = stale;
+        assert_eq!(keys.unlock(&a), Err(Error::DecryptionFailed));
+    }
+
+    #[test]
+    fn recovery_key_unlocks_until_rotation() {
+        let (mut keys, root) = AccountKeys::create(&SoftPasskey::generate(), "a").unwrap();
+        let recovery = RecoveryKey::from_root(&root);
+        assert_eq!(keys.unlock_with_recovery_key(&recovery).unwrap(), root);
+        let new = keys.rotate(&root).unwrap();
+        assert_eq!(
+            keys.unlock_with_recovery_key(&recovery),
+            Err(Error::WrongRootSecret)
+        );
+        assert_eq!(
+            keys.unlock_with_recovery_key(&RecoveryKey::from_root(&new))
+                .unwrap(),
+            new
+        );
     }
 
     #[test]
