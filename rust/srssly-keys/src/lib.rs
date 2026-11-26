@@ -29,7 +29,7 @@ use keys::{recovery, wrap};
 
 pub use account::{AccountId, AccountKeys, PasskeyInfo};
 pub use error::{Error, Result};
-pub use keys::{DerivedKeys, KeyCheck, RootSecret};
+pub use keys::{DataKey, DerivedKeys, KeyCheck, RootSecret};
 pub use passkey::{
     CredentialIdHash, PRF_INPUT, PasskeyKeyPair, PrfAuthenticator, PrfOutput, SoftPasskey,
     ctap_hmac_secret_salt,
