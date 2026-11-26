@@ -344,7 +344,8 @@ fn run(cli: Cli) -> Result<Value, CliError> {
             keys.verify_root(&root)?;
             let derived = root.derive(&keys.account_id);
             let mut out = summary(&keys);
-            out["derived_auth_public_key"] = json!(B64.encode(derived.auth_public_key()));
+            out["derived_auth_public_key"] =
+                json!(B64.encode(derived.auth_public_key().to_bytes()));
             Ok(out)
         }
     }
