@@ -6,9 +6,20 @@ description = "Key management for Srssly end-to-end encrypted sync: passkey PRF 
 publish = false
 
 [dependencies]
+base64 = "0.23.1"
 ed25519-dalek = "3.0.0"
 getrandom = "0.4.3"
 hkdf = "0.13.0"
+hmac = "0.13.0"
+hpke = { version = "0.15.2", default-features = false, features = ["aes", "alloc", "getrandom", "x25519"] }
+serde = { version = "1.0.229", features = ["derive"] }
 sha2 = "0.11.2"
 thiserror = "2.0.21"
 zeroize = { version = "1.9.2", features = ["derive"] }
+
+[features]
+# SoftPasskey, a software passkey for tests and the CLI. Never enable it in an app.
+soft-passkey = []
+
+[dev-dependencies]
+serde_json = "1.0.154"

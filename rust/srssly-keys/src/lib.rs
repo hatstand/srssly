@@ -4,6 +4,7 @@
 //! other key derives. See `README.md` for the design.
 
 mod account;
+mod b64;
 mod error;
 mod keys;
 mod passkey;
@@ -11,7 +12,11 @@ mod passkey;
 pub use account::AccountId;
 pub use error::{Error, Result};
 pub use keys::{DataKey, DerivedKeys, KeyCheck, RootSecret};
-pub use passkey::{PRF_INPUT, PrfAuthenticator, PrfOutput, ctap_hmac_secret_salt};
+#[cfg(any(test, feature = "soft-passkey"))]
+pub use passkey::SoftPasskey;
+pub use passkey::{
+    CredentialIdHash, PRF_INPUT, PasskeyKeyPair, PrfAuthenticator, PrfOutput, ctap_hmac_secret_salt,
+};
 
 pub(crate) fn random_bytes<const N: usize>() -> [u8; N] {
     let mut out = [0u8; N];

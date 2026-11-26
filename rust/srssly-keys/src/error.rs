@@ -6,6 +6,9 @@ pub enum Error {
     /// The authenticator failed to produce a PRF output.
     #[error("authenticator error: {0}")]
     Authenticator(String),
+    /// A stored field has the wrong length or encoding.
+    #[error("malformed {0}")]
+    Malformed(&'static str),
 }
 
 impl Error {
@@ -13,6 +16,7 @@ impl Error {
     pub fn code(&self) -> &'static str {
         match self {
             Error::Authenticator(_) => "authenticator",
+            Error::Malformed(_) => "malformed",
         }
     }
 }
