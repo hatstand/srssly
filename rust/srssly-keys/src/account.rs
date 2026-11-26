@@ -2,7 +2,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::keys::{KeyCheck, RootSecret};
+use crate::keys::{AuthPublicKey, KeyCheck, RootSecret};
 use crate::passkey::{CredentialIdHash, PRF_INPUT, PasskeyKeyPair, PrfAuthenticator, PrfOutput};
 use crate::wrap::WrappedSecret;
 use crate::{Error, FORMAT_VERSION, Result, b64, random_bytes};
@@ -58,8 +58,7 @@ pub struct AccountKeys {
     /// Identifies the current root secret.
     pub key_check: KeyCheck,
     /// The current Ed25519 relay-authentication public key.
-    #[serde(with = "b64")]
-    pub auth_public_key: [u8; 32],
+    pub auth_public_key: AuthPublicKey,
     pub passkeys: Vec<PasskeyInfo>,
 }
 
