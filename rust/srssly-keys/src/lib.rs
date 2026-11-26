@@ -11,7 +11,7 @@ mod passkey;
 
 pub use account::AccountId;
 pub use error::{Error, Result};
-pub use keys::{DerivedKeys, KeyCheck, RootSecret};
+pub use keys::{DataKey, DerivedKeys, KeyCheck, RootSecret};
 pub use passkey::{PRF_INPUT, PrfAuthenticator, PrfOutput, SoftPasskey, ctap_hmac_secret_salt};
 
 pub(crate) fn random_bytes<const N: usize>() -> [u8; N] {
