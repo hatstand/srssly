@@ -1,5 +1,6 @@
 use std::fmt;
 
+use ed25519_dalek::SigningKey;
 use hkdf::Hkdf;
 use sha2::Sha256;
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -41,6 +42,15 @@ impl RootSecret {
     pub fn key_check(&self, account: &AccountId) -> KeyCheck {
         KeyCheck(self.expand(account, b"key-check"))
     }
+
+    /// The keys derived from this secret for `account`.
+    pub fn derive(&self, account: &AccountId) -> DerivedKeys {
+        let auth_seed: [u8; 32] = self.expand(account, b"auth-key");
+        DerivedKeys {
+            data_key: DataKey(self.expand(account, b"data-key")),
+            auth_key: SigningKey::from_bytes(&auth_seed),
+        }
+    }
 }
 
 /// Whether 32 bytes have at least 8 distinct values. Entropy can't be measured
@@ -61,6 +71,31 @@ fn looks_random(bytes: &[u8; 32]) -> bool {
 impl fmt::Debug for RootSecret {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("RootSecret(..)")
+    }
+}
+
+/// Keys derived from the root secret.
+pub struct DerivedKeys {
+    pub data_key: DataKey,
+    /// Ed25519 key that authenticates this account to the relay.
+    pub auth_key: SigningKey,
+}
+
+impl DerivedKeys {
+    /// The relay identifies the account's current key by this public key.
+    pub fn auth_public_key(&self) -> [u8; 32] {
+        self.auth_key.verifying_key().to_bytes()
+    }
+}
+
+/// The AES-256-GCM key for sync records. Like [`RootSecret`], its bytes can't
+/// be read outside this module, and it is wiped when dropped.
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+pub struct DataKey([u8; 32]);
+
+impl fmt::Debug for DataKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("DataKey(..)")
     }
 }
 
@@ -103,6 +138,19 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn derived_keys_are_deterministic_and_independent() {
+        let root = test_root(1);
+        let a = root.derive(&account());
+        let b = root.derive(&account());
+        assert_eq!(a.data_key.0, b.data_key.0);
+        assert_eq!(a.auth_public_key(), b.auth_public_key());
+        assert_ne!(a.data_key.0, a.auth_key.to_bytes());
+        assert_ne!(&a.data_key.0[..16], root.key_check(&account()).as_bytes());
+        let other = AccountId::from_bytes([8; 16]);
+        assert_ne!(a.data_key.0, root.derive(&other).data_key.0);
+    }
+
+    #[test]
     fn generated_secrets_differ() {
         assert_ne!(RootSecret::generate(), RootSecret::generate());
         assert_ne!(AccountId::generate(), AccountId::generate());
@@ -123,6 +171,8 @@ pub(crate) mod tests {
     fn debug_hides_secret() {
         let root = test_root(0xAB);
         assert_eq!(format!("{root:?}"), "RootSecret(..)");
+        let keys = root.derive(&account());
+        assert_eq!(format!("{:?}", keys.data_key), "DataKey(..)");
     }
 
     /// Pins the derivation so other implementations (Swift, Kotlin, web) can
@@ -135,6 +185,17 @@ pub(crate) mod tests {
             "key_check",
             root.key_check(&account()).as_bytes(),
             "7d745637d079f47074bfa7e55b88b32e",
+        );
+        let keys = root.derive(&account());
+        assert_hex(
+            "data_key",
+            &keys.data_key.0,
+            "cd83ad81a9fdd0261d66adc35de901016197cef3917079477a6153a7e1fd1678",
+        );
+        assert_hex(
+            "auth_public",
+            &keys.auth_public_key(),
+            "b73c2d802b74e5438e51c49cbab6873ba403e6a67ceea29abe902a4a72bd3172",
         );
     }
 
