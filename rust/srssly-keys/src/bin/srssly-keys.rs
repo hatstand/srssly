@@ -263,7 +263,7 @@ fn summary(keys: &AccountKeys) -> Value {
         "account_id": keys.account_id.to_string(),
         "epoch": keys.epoch,
         "key_check": B64.encode(keys.key_check.as_bytes()),
-        "auth_public_key": B64.encode(keys.auth_public_key),
+        "auth_public_key": B64.encode(keys.auth_public_key.to_bytes()),
         "passkeys": keys.passkeys.len(),
     })
 }
@@ -391,7 +391,8 @@ fn run(cli: Cli) -> Result<Value, CliError> {
             keys.verify_root(&root)?;
             let derived = root.derive(&keys.account_id);
             let mut out = summary(&keys);
-            out["derived_auth_public_key"] = json!(B64.encode(derived.auth_public_key()));
+            out["derived_auth_public_key"] =
+                json!(B64.encode(derived.auth_public_key().to_bytes()));
             Ok(out)
         }
     }
