@@ -58,8 +58,8 @@ final class LaunchTests: XCTestCase {
         waitForExpectations(timeout: 5)
     }
 
-    /// The list hides read articles, but one read while looking at the list
-    /// stays put until the list is told to hide it.
+    /// The list hides read articles, but one just read in the reader stays
+    /// put on coming back, until the list is told to hide it.
     @MainActor
     func testReadArticleStaysUntilHidden() {
         let app = XCUIApplication()
@@ -73,9 +73,12 @@ final class LaunchTests: XCTestCase {
         // hierarchy isn't always the top one on screen.
         let sameArticle = app.descendants(matching: .any).matching(identifier: "article-row")
             .matching(NSPredicate(format: "label == %@", title)).firstMatch
-        sameArticle.swipeRight()
-        app.buttons["Read"].firstMatch.tap()
-        XCTAssertTrue(sameArticle.waitForExistence(timeout: 2), "Reading an article shouldn't pull it out of the list")
+        // Opening it marks it read. (Swipe actions are avoided here: a fast
+        // swipe can fire the action without showing its button.)
+        sameArticle.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["reader-pager"].firstMatch.waitForExistence(timeout: 5))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(sameArticle.waitForExistence(timeout: 5), "Reading an article shouldn't pull it out of the list")
 
         app.buttons["Filter"].firstMatch.tap()
         app.buttons["Hide Read"].firstMatch.tap()
