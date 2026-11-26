@@ -25,6 +25,11 @@ impl RootSecret {
         Self(bytes)
     }
 
+    /// Only for sealing the secret (to a passkey, or as a recovery key).
+    pub(crate) fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
     /// `HKDF-SHA256(salt = "srssly/v1/root/" || account, ikm = root)`.
     pub(crate) fn expand<const N: usize>(&self, account: &AccountId, info: &[u8]) -> [u8; N] {
         let mut salt = b"srssly/v1/root/".to_vec();
