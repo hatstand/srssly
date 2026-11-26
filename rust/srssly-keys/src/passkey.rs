@@ -1,11 +1,15 @@
 use std::fmt;
 
+use hkdf::Hkdf;
 use hmac::{Hmac, KeyInit, Mac};
+use hpke::Kem as _;
+use hpke::Serializable as _;
+use hpke::kem::X25519HkdfSha256;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use crate::{Result, b64, random_bytes};
+use crate::{Error, Result, b64, random_bytes};
 
 /// The PRF input every Srssly client passes to WebAuthn (`prf.eval.first`).
 ///
@@ -107,6 +111,63 @@ impl PrfAuthenticator for SoftPasskey {
     }
 }
 
+/// SHA-256 of a WebAuthn credential ID; the relay indexes passkeys by it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CredentialIdHash(#[serde(with = "b64")] [u8; 32]);
+
+impl CredentialIdHash {
+    pub fn of(credential_id: &[u8]) -> Self {
+        Self(Sha256::digest(credential_id).into())
+    }
+
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    pub fn to_base64url(&self) -> String {
+        b64::encode(&self.0)
+    }
+
+    pub fn from_base64url(s: &str) -> Result<Self> {
+        let bytes = b64::decode(s).ok_or(Error::Malformed("credential ID hash"))?;
+        let bytes = bytes.try_into();
+        Ok(Self(
+            bytes.map_err(|_| Error::Malformed("credential ID hash"))?,
+        ))
+    }
+}
+
+/// The X25519 key pair a passkey's PRF output stands for. Its public key is
+/// stored on the relay, so the root secret can be sealed to the passkey
+/// without asking it again.
+pub struct PasskeyKeyPair {
+    #[expect(
+        dead_code,
+        reason = "read when opening a wrapped secret, in the next change"
+    )]
+    pub(crate) private: <X25519HkdfSha256 as hpke::Kem>::PrivateKey,
+    pub(crate) public: [u8; 32],
+}
+
+impl PasskeyKeyPair {
+    /// RFC 9180 `DeriveKeyPair` from `HKDF-SHA256(salt =
+    /// "srssly/v1/passkey-kem", ikm = PRF output, info = "x25519")`.
+    pub fn from_prf(prf: &PrfOutput) -> Self {
+        let mut ikm = [0u8; 32];
+        Hkdf::<Sha256>::new(Some(b"srssly/v1/passkey-kem"), prf.as_bytes())
+            .expand(b"x25519", &mut ikm)
+            .expect("HKDF output length is valid");
+        let (private, public) = X25519HkdfSha256::derive_keypair(&ikm);
+        ikm.zeroize();
+        let public: [u8; 32] = public.to_bytes().into();
+        Self { private, public }
+    }
+
+    pub fn public_key(&self) -> &[u8; 32] {
+        &self.public
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,6 +226,39 @@ mod tests {
             pk.evaluate_prf(PRF_INPUT).unwrap().as_bytes(),
             "0763ce60a3fe189c114c48cf3a5ef43bbe48429e10c6384a67de5ead8a96e1f9",
         );
+    }
+
+    #[test]
+    fn key_pair_is_deterministic_per_prf() {
+        let prf = PrfOutput::from_bytes([3; 32]);
+        let other = PrfOutput::from_bytes([4; 32]);
+        let public = |p| *PasskeyKeyPair::from_prf(p).public_key();
+        assert_eq!(public(&prf), public(&prf));
+        assert_ne!(public(&prf), public(&other));
+    }
+
+    /// Expected value from `scripts/known_answers.py`, which implements
+    /// RFC 9180 DeriveKeyPair independently.
+    #[test]
+    fn key_pair_known_answer() {
+        let pk = SoftPasskey::from_parts(b"cred".to_vec(), [9; 32]);
+        let prf = pk.evaluate_prf(PRF_INPUT).unwrap();
+        crate::keys::tests::assert_hex(
+            "passkey_public",
+            PasskeyKeyPair::from_prf(&prf).public_key(),
+            "3819b8a928132364538f0874ebacc1d03b551b8e2d1c3c0af8163d0209babd3e",
+        );
+    }
+
+    #[test]
+    fn credential_id_hash_round_trips() {
+        let h = CredentialIdHash::of(b"cred");
+        assert_eq!(
+            CredentialIdHash::from_base64url(&h.to_base64url()).unwrap(),
+            h
+        );
+        assert!(CredentialIdHash::from_base64url("short").is_err());
+        assert!(CredentialIdHash::from_base64url("!!").is_err());
     }
 
     #[test]
