@@ -2,11 +2,12 @@ use std::fmt;
 
 use ed25519_dalek::SigningKey;
 use hkdf::Hkdf;
+use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::account::AccountId;
-use crate::random_bytes;
+use crate::{b64, random_bytes};
 
 /// The account's root secret: 32 random bytes from which every other key derives.
 #[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
@@ -81,8 +82,8 @@ impl Drop for DerivedKeys {
 }
 
 /// A 16-byte public value that identifies a root secret without revealing it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct KeyCheck([u8; 16]);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyCheck(#[serde(with = "b64")] [u8; 16]);
 
 impl KeyCheck {
     pub fn as_bytes(&self) -> &[u8; 16] {

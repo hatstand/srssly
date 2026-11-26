@@ -11,7 +11,7 @@ mod passkey;
 mod recovery;
 mod wrap;
 
-pub use account::AccountId;
+pub use account::{AccountId, AccountKeys, PasskeyInfo};
 pub use error::{Error, Result};
 pub use keys::{DerivedKeys, KeyCheck, RootSecret};
 pub use passkey::{
@@ -20,6 +20,8 @@ pub use passkey::{
 };
 pub use recovery::RecoveryKey;
 pub use wrap::WrappedSecret;
+/// Format version of every serialized structure in this crate.
+pub const FORMAT_VERSION: u32 = 1;
 
 pub(crate) fn random_bytes<const N: usize>() -> [u8; N] {
     let mut out = [0u8; N];
