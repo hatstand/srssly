@@ -8,8 +8,9 @@ mod b64;
 mod error;
 mod keys;
 mod passkey;
-mod recovery;
-mod wrap;
+
+// Keep `crate::recovery` and `crate::wrap` as short paths inside the crate.
+use keys::{recovery, wrap};
 
 pub use account::{AccountId, AccountKeys, PasskeyInfo};
 pub use error::{Error, Result};
