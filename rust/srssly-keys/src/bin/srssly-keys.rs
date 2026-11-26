@@ -84,10 +84,10 @@ struct PasskeyArgs {
     #[arg(long, required_unless_present = "prf", conflicts_with_all = ["credential_id", "prf"])]
     passkey: Option<PathBuf>,
     /// Credential ID, base64url.
-    #[arg(long, requires = "prf")]
+    #[arg(long, requires = "prf", allow_hyphen_values = true)]
     credential_id: Option<String>,
     /// PRF output for Srssly's PRF input, base64url (32 bytes).
-    #[arg(long, requires = "credential_id")]
+    #[arg(long, requires = "credential_id", allow_hyphen_values = true)]
     prf: Option<String>,
 }
 
