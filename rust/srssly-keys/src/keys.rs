@@ -1,8 +1,8 @@
 use std::fmt;
 
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use hkdf::Hkdf;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::Sha256;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -102,8 +102,40 @@ pub struct DerivedKeys {
 
 impl DerivedKeys {
     /// The relay identifies the account's current key by this public key.
-    pub fn auth_public_key(&self) -> [u8; 32] {
-        self.auth_key.verifying_key().to_bytes()
+    pub fn auth_public_key(&self) -> AuthPublicKey {
+        AuthPublicKey(self.auth_key.verifying_key())
+    }
+}
+
+/// The Ed25519 public key that authenticates an account to the relay. Always
+/// a valid curve point: parsing rejects bytes that aren't one.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct AuthPublicKey(VerifyingKey);
+
+impl AuthPublicKey {
+    pub fn to_bytes(&self) -> [u8; 32] {
+        self.0.to_bytes()
+    }
+}
+
+impl fmt::Debug for AuthPublicKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "AuthPublicKey({})", b64::encode(&self.to_bytes()))
+    }
+}
+
+impl Serialize for AuthPublicKey {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        b64::serialize(self.to_bytes(), s)
+    }
+}
+
+impl<'de> Deserialize<'de> for AuthPublicKey {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let bytes: [u8; 32] = b64::deserialize(d)?;
+        VerifyingKey::from_bytes(&bytes)
+            .map(Self)
+            .map_err(|_| serde::de::Error::custom("not an Ed25519 public key"))
     }
 }
 
@@ -187,6 +219,19 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn auth_public_key_round_trips_and_rejects_non_points() {
+        let key = test_root(0).derive(&account()).auth_public_key();
+        let json = serde_json::to_string(&key).unwrap();
+        assert_eq!(serde_json::from_str::<AuthPublicKey>(&json).unwrap(), key);
+        let not_a_point = (0u8..=255)
+            .map(|i| [i; 32])
+            .find(|b| VerifyingKey::from_bytes(b).is_err())
+            .unwrap();
+        let json = format!("\"{}\"", b64::encode(&not_a_point));
+        assert!(serde_json::from_str::<AuthPublicKey>(&json).is_err());
+    }
+
+    #[test]
     fn debug_hides_secret() {
         let root = test_root(0xAB);
         assert_eq!(format!("{root:?}"), "RootSecret(..)");
@@ -213,7 +258,7 @@ pub(crate) mod tests {
         );
         assert_hex(
             "auth_public",
-            &keys.auth_public_key(),
+            &keys.auth_public_key().to_bytes(),
             "b73c2d802b74e5438e51c49cbab6873ba403e6a67ceea29abe902a4a72bd3172",
         );
     }
