@@ -69,15 +69,17 @@ final class LaunchTests: XCTestCase {
         let firstRow = app.descendants(matching: .any)["article-row"].firstMatch
         XCTAssertTrue(firstRow.waitForExistence(timeout: 5))
         let title = firstRow.label
-        firstRow.swipeRight()
+        // Found by label: cells are reused, so the first row in the
+        // hierarchy isn't always the top one on screen.
+        let sameArticle = app.descendants(matching: .any).matching(identifier: "article-row")
+            .matching(NSPredicate(format: "label == %@", title)).firstMatch
+        sameArticle.swipeRight()
         app.buttons["Read"].firstMatch.tap()
-        XCTAssertEqual(firstRow.label, title, "Reading an article shouldn't pull it out of the list")
+        XCTAssertTrue(sameArticle.waitForExistence(timeout: 2), "Reading an article shouldn't pull it out of the list")
 
         app.buttons["Filter"].firstMatch.tap()
         app.buttons["Hide Read"].firstMatch.tap()
-        let hidden = NSPredicate { _, _ in firstRow.label != title }
-        expectation(for: hidden, evaluatedWith: nil)
-        waitForExpectations(timeout: 5)
+        XCTAssertTrue(sameArticle.waitForNonExistence(timeout: 5), "Hide Read should remove it")
     }
 
     /// Records launch time. Set a baseline in Xcode (Report navigator) to make
