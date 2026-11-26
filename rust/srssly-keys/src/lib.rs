@@ -29,7 +29,7 @@ use keys::{recovery, wrap};
 
 pub use account::{AccountId, AccountKeys, PasskeyInfo};
 pub use error::{Error, Result};
-pub use keys::{DataKey, DerivedKeys, KeyCheck, RootSecret};
+pub use keys::{AuthPublicKey, DataKey, DerivedKeys, KeyCheck, RootSecret};
 #[cfg(any(test, feature = "soft-passkey"))]
 pub use passkey::SoftPasskey;
 pub use passkey::{
