@@ -9,6 +9,9 @@ use crate::account::AccountId;
 use crate::random_bytes;
 
 /// The account's root secret: 32 random bytes from which every other key derives.
+///
+/// There is deliberately no public way to read the bytes back out, so they
+/// can't be logged or sent anywhere by accident.
 #[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct RootSecret([u8; 32]);
 
@@ -22,7 +25,8 @@ impl RootSecret {
         Self(bytes)
     }
 
-    pub fn as_bytes(&self) -> &[u8; 32] {
+    /// Only for sealing the secret (to a passkey, or as a recovery key).
+    pub(crate) fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 
