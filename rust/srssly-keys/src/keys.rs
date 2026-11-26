@@ -9,6 +9,10 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 use crate::account::AccountId;
 use crate::{b64, random_bytes};
 
+// Children of this module can read the root secret's bytes; nothing else can.
+pub(crate) mod recovery;
+pub(crate) mod wrap;
+
 /// The account's root secret: 32 random bytes from which every other key derives.
 ///
 /// There is deliberately no public way to read the bytes back out, so they
@@ -26,8 +30,9 @@ impl RootSecret {
         Self(bytes)
     }
 
-    /// Only for sealing the secret (to a passkey, or as a recovery key).
-    pub(crate) fn as_bytes(&self) -> &[u8; 32] {
+    /// Private: only this module and its children (which seal the secret) can
+    /// read the bytes.
+    fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 
