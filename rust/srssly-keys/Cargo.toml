@@ -1,0 +1,12 @@
+[package]
+name = "srssly-keys"
+version = "0.1.0"
+edition = "2024"
+description = "Key management for Srssly end-to-end encrypted sync: passkey PRF wrapping, recovery keys, rotation"
+publish = false
+
+[dependencies]
+getrandom = "0.4.3"
+hkdf = "0.13.0"
+sha2 = "0.11.2"
+zeroize = { version = "1.9.2", features = ["derive"] }
