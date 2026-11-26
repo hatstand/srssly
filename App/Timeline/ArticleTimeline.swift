@@ -32,7 +32,16 @@ struct ArticleTimeline: View {
     @Query private var states: [ArticleState]
     @Environment(\.feedRefresher) private var refresher
     @Environment(\.modelContext) private var context
-    @AppStorage("timelineFilter") private var filter: TimelineFilter = .all
+    @Environment(\.scenePhase) private var scenePhase
+    // Read articles are hidden unless the menu says otherwise.
+    @AppStorage("timelineFilter") private var filter: TimelineFilter = .unread
+    /// Articles that were read when the unread list last settled; only these
+    /// are hidden. One read since then (in the reader or by swiping) stays
+    /// listed, dimmed, so rows don't vanish from under a swipe and coming
+    /// back from the reader keeps your place. The list settles when it first
+    /// appears, on pull to refresh, on changing the filter, after Mark All as
+    /// Read, from the menu's Hide Read, and on leaving the app.
+    @State private var hiddenRead: Set<String>?
 
     init(subscriptions: [Subscription], only subscriptionID: UUID? = nil) {
         self.subscriptions = subscriptions
@@ -49,10 +58,11 @@ struct ArticleTimeline: View {
         let titles = Dictionary(subscriptions.map { ($0.id, $0.title) }, uniquingKeysWith: { a, _ in a })
         let read = Set(states.lazy.filter(\.isRead).map(\.articleKey))
         let starred = Set(states.lazy.filter(\.isStarred).map(\.articleKey))
+        let hidden = hiddenRead ?? read
         let shown = articles.filter { article in
             switch filter {
             case .all: true
-            case .unread: !read.contains(article.key)
+            case .unread: !(read.contains(article.key) && hidden.contains(article.key))
             case .starred: starred.contains(article.key)
             }
         }
@@ -83,7 +93,15 @@ struct ArticleTimeline: View {
             }
         }
         .listStyle(.plain)
-        .refreshable { await refresher?.refresh(force: true) }
+        .refreshable {
+            await refresher?.refresh(force: true)
+            settle()
+        }
+        .onAppear { if hiddenRead == nil { settle() } }
+        .onChange(of: filter) { settle() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background { settle() }
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
@@ -92,9 +110,15 @@ struct ArticleTimeline: View {
                     }
                     Divider()
                     Button("Mark All as Read", systemImage: "checkmark.circle") {
-                        update(read: true, keys: shown.map(\.key))
+                        let keys = shown.map(\.key)
+                        update(read: true, keys: keys)
+                        // The query hasn't seen the save yet.
+                        settle(alsoRead: keys)
                     }
                     .disabled(shown.allSatisfy { read.contains($0.key) })
+                    if filter == .unread, shown.contains(where: { read.contains($0.key) }) {
+                        Button("Hide Read", systemImage: "eye.slash") { settle() }
+                    }
                 } label: {
                     Label("Filter", systemImage: filter == .all
                           ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
@@ -113,6 +137,11 @@ struct ArticleTimeline: View {
                 }
             }
         }
+    }
+
+    /// Hides articles read so far.
+    private func settle(alsoRead keys: [String] = []) {
+        hiddenRead = Set(states.lazy.filter(\.isRead).map(\.articleKey)).union(keys)
     }
 
     private func update(read: Bool? = nil, starred: Bool? = nil, keys: [String]) {
