@@ -350,3 +350,22 @@ fn errors_are_json_with_codes() {
     assert_eq!(e.err(&raw("!!", "AA")), "usage");
     assert_eq!(e.err(&raw("AA", "AA")), "usage");
 }
+
+#[test]
+fn raw_values_may_start_with_a_hyphen() {
+    // base64url uses '-', so a random credential ID or PRF can start with one.
+    let e = Env::new();
+    let prf = format!("-{}", "A".repeat(42));
+    let created = e.ok(&[
+        "create",
+        "--account",
+        "a",
+        "--device",
+        "d",
+        "--credential-id",
+        "-AAA",
+        "--prf",
+        &prf,
+    ]);
+    assert_eq!(created["epoch"], 0);
+}
