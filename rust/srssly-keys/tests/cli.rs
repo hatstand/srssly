@@ -185,6 +185,139 @@ fn create_then_unlock() {
 }
 
 #[test]
+fn manage_passkeys() {
+    let e = Env::new();
+    e.new_passkey("a.json");
+    e.new_passkey("b.json");
+    let c = e.new_passkey("c.json");
+    e.ok(&[
+        "create",
+        "--account",
+        "acct.json",
+        "--device",
+        "dev.json",
+        "--passkey",
+        "a.json",
+        "--label",
+        "laptop",
+    ]);
+    let add = |pk, label| {
+        [
+            "add-passkey",
+            "--account",
+            "acct.json",
+            "--device",
+            "dev.json",
+            "--passkey",
+            pk,
+            "--label",
+            label,
+        ]
+    };
+    e.ok(&add("b.json", "phone"));
+    assert_eq!(e.ok(&add("c.json", "yubikey"))["passkeys"], 3);
+    assert_eq!(e.err(&add("b.json", "again")), "duplicate_passkey");
+
+    let list = e.ok(&["list", "--account", "acct.json"]);
+    let labels: Vec<&str> = list["passkeys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(labels, ["laptop", "phone", "yubikey"]);
+
+    // Every passkey unlocks the same account on a fresh device.
+    for pk in ["a.json", "b.json", "c.json"] {
+        let dev = format!("new-{pk}");
+        e.ok(&[
+            "unlock",
+            "--account",
+            "acct.json",
+            "--passkey",
+            pk,
+            "--device-out",
+            &dev,
+        ]);
+        e.ok(&["verify", "--account", "acct.json", "--device", &dev]);
+    }
+
+    // Remove by credential ID hash, then by passkey file; never the last.
+    let hash = c["credential_id_hash"].as_str().unwrap();
+    let removed = e.ok(&[
+        "remove-passkey",
+        "--account",
+        "acct.json",
+        "--credential-id-hash",
+        hash,
+    ]);
+    assert_eq!(removed["removed"], "yubikey");
+    assert_eq!(
+        e.err(&["unlock", "--account", "acct.json", "--passkey", "c.json"]),
+        "unknown_passkey"
+    );
+    e.ok(&[
+        "remove-passkey",
+        "--account",
+        "acct.json",
+        "--passkey",
+        "b.json",
+    ]);
+    assert_eq!(
+        e.err(&[
+            "remove-passkey",
+            "--account",
+            "acct.json",
+            "--passkey",
+            "a.json"
+        ]),
+        "last_passkey"
+    );
+}
+
+#[test]
+fn verify_rejects_another_accounts_device() {
+    let e = Env::new();
+    e.new_passkey("a.json");
+    e.ok(&[
+        "create",
+        "--account",
+        "one.json",
+        "--device",
+        "one-dev.json",
+        "--passkey",
+        "a.json",
+    ]);
+    e.ok(&[
+        "create",
+        "--account",
+        "two.json",
+        "--device",
+        "two-dev.json",
+        "--passkey",
+        "a.json",
+    ]);
+    let ok = e.ok(&[
+        "verify",
+        "--account",
+        "one.json",
+        "--device",
+        "one-dev.json",
+    ]);
+    assert_eq!(ok["derived_auth_public_key"], ok["auth_public_key"]);
+    assert_eq!(
+        e.err(&[
+            "verify",
+            "--account",
+            "one.json",
+            "--device",
+            "two-dev.json"
+        ]),
+        "wrong_root_secret"
+    );
+}
+
+#[test]
 fn errors_are_json_with_codes() {
     let e = Env::new();
     assert_eq!(

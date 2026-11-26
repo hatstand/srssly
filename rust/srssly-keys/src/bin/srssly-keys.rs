@@ -57,6 +57,39 @@ enum Command {
         #[arg(long)]
         device_out: Option<PathBuf>,
     },
+    /// Register another passkey, using an unlocked device.
+    AddPasskey {
+        #[arg(long)]
+        account: PathBuf,
+        #[arg(long)]
+        device: PathBuf,
+        #[command(flatten)]
+        passkey: PasskeyArgs,
+        #[arg(long, default_value = "passkey")]
+        label: String,
+    },
+    /// List registered passkeys.
+    List {
+        #[arg(long)]
+        account: PathBuf,
+    },
+    /// Remove a passkey by credential ID hash or passkey file.
+    RemovePasskey {
+        #[arg(long)]
+        account: PathBuf,
+        #[arg(long, conflicts_with = "passkey", required_unless_present = "passkey")]
+        credential_id_hash: Option<String>,
+        /// A software passkey file.
+        #[arg(long)]
+        passkey: Option<PathBuf>,
+    },
+    /// Check a device's root secret against the account and show its public keys.
+    Verify {
+        #[arg(long)]
+        account: PathBuf,
+        #[arg(long)]
+        device: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -125,6 +158,13 @@ impl Device {
             epoch: keys.epoch,
             root_secret: B64.encode(root.as_bytes()),
         }
+    }
+
+    fn root(&self) -> Result<RootSecret, CliError> {
+        let bytes: [u8; 32] = decode(&self.root_secret, "root secret")?
+            .try_into()
+            .map_err(|_| CliError::usage("root secret must be 32 bytes"))?;
+        Ok(RootSecret::from_bytes(bytes))
     }
 }
 
@@ -248,6 +288,64 @@ fn run(cli: Cli) -> Result<Value, CliError> {
                 write_json(&path, &Device::new(&keys, &root))?;
             }
             Ok(summary(&keys))
+        }
+        Command::AddPasskey {
+            account,
+            device,
+            passkey,
+            label,
+        } => {
+            let mut keys = read_account(&account)?;
+            let root = read_json::<Device>(&device)?.root()?;
+            let (id, prf) = passkey.resolve()?;
+            keys.add_passkey_with_prf(&root, &id, &prf, &label)?;
+            write_account(&account, &keys)?;
+            Ok(summary(&keys))
+        }
+        Command::List { account } => {
+            let keys = read_account(&account)?;
+            let passkeys: Vec<Value> = keys
+                .passkeys
+                .iter()
+                .map(|p| {
+                    json!({
+                        "label": p.label,
+                        "credential_id_hash": p.credential_id_hash.to_base64url(),
+                        "public_key": B64.encode(p.wrapped.public_key),
+                    })
+                })
+                .collect();
+            Ok(
+                json!({ "account_id": keys.account_id.to_string(), "epoch": keys.epoch, "passkeys": passkeys }),
+            )
+        }
+        Command::RemovePasskey {
+            account,
+            credential_id_hash,
+            passkey,
+        } => {
+            let mut keys = read_account(&account)?;
+            let hash = match (credential_id_hash, passkey) {
+                (Some(h), _) => CredentialIdHash::from_base64url(&h)?,
+                (None, Some(path)) => {
+                    CredentialIdHash::of(read_json::<SoftPasskey>(&path)?.credential_id())
+                }
+                (None, None) => unreachable!("clap requires one"),
+            };
+            let removed = keys.remove_passkey(&hash)?;
+            write_account(&account, &keys)?;
+            let mut out = summary(&keys);
+            out["removed"] = json!(removed.label);
+            Ok(out)
+        }
+        Command::Verify { account, device } => {
+            let keys = read_account(&account)?;
+            let root = read_json::<Device>(&device)?.root()?;
+            keys.verify_root(&root)?;
+            let derived = root.derive(&keys.account_id);
+            let mut out = summary(&keys);
+            out["derived_auth_public_key"] = json!(B64.encode(derived.auth_public_key()));
+            Ok(out)
         }
     }
 }
