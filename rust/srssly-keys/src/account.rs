@@ -287,12 +287,9 @@ mod tests {
 
     #[test]
     fn json_holds_no_secrets() {
-        let root = RootSecret::generate();
-        assert!(
-            !record(&root)
-                .to_json()
-                .contains(&b64::encode(root.as_bytes()))
-        );
+        let bytes = [0x5a; 32];
+        let json = record(&RootSecret::from_bytes(bytes)).to_json();
+        assert!(!json.contains(&b64::encode(&bytes)));
     }
 
     #[test]
