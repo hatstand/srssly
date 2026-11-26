@@ -36,12 +36,14 @@ results = {
     ),
     "ctap_salt": hashlib.sha256(b"WebAuthn PRF\x00" + b"srssly/v1/passkey-prf").digest(),
 }
+results["prf"] = H(bytes([9] * 32), results["ctap_salt"])
 
 # The same values are pinned in the Rust tests.
 EXPECTED = {
     "key_check": "569b212342900e7981bf6ebcc19865bc",
     "data_key": "c3f98b38d6afda017c359a1192342d596b85d1d2f60c657fa37475df84d2c2ce",
     "auth_public": "b0745fcd50b58602711805695ec13ef10693ce25c623962a3ab9628d9f1529fc",
+    "prf": "0763ce60a3fe189c114c48cf3a5ef43bbe48429e10c6384a67de5ead8a96e1f9",
     "ctap_salt": "09cfa2c104ea19b7a59f9472b2b6fd18194db1b560fa3bff1add23bfdd921a42",
 }
 
