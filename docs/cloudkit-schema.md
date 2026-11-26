@@ -75,8 +75,37 @@ See `ArticleKey.make` in `Packages/SrsslyCore/Sources/SrsslyCore/ArticleKey.swif
 
 ## Deploying
 
-The development schema is created automatically when a signed debug build
-first saves records. Before a TestFlight or App Store release, deploy it to
-production in the CloudKit Console (Schema → Deploy Schema Changes). Add
-queryable indexes on `ArticleState.subscriptionID` and `modifiedAt` if a web
-client needs to query by them.
+[`cloudkit/schema.ckdb`](../cloudkit/schema.ckdb) is this schema in
+CloudKit's schema language. Keep it in step with the tables above and with
+`CloudSchema` in `CloudRecords.swift`.
+
+Production never changes by itself. The development schema only grows as
+debug builds save records, and a field that has only ever been nil (say
+`folder`) never gets created, so TestFlight and App Store builds would fail
+to save it. So before the first TestFlight build, and after any schema
+change:
+
+1. Get a management token: CloudKit Console → (account menu) → Manage
+   Tokens → CloudKit Management Token, then
+   `xcrun cktool save-token --type management`.
+2. Load the file into development (this only adds; it never removes
+   fields production has):
+
+   ```sh
+   xcrun cktool validate-schema --team-id CZ8XD8GTGZ \
+     --container-id iCloud.com.purplehatstands.srssly \
+     --environment development --file cloudkit/schema.ckdb
+   xcrun cktool import-schema --team-id CZ8XD8GTGZ \
+     --container-id iCloud.com.purplehatstands.srssly \
+     --environment development --file cloudkit/schema.ckdb
+   ```
+
+3. In the [CloudKit Console](https://icloud.developer.apple.com/), pick the
+   container → Schema → Deploy Schema Changes, check the diff lists only
+   `Subscription` and `ArticleState` changes, and deploy.
+
+Production schema changes are add-only: a field or record type can never be
+removed or retyped once deployed, so change the schema with care.
+
+Add queryable indexes on `ArticleState.subscriptionID` and `modifiedAt` when
+a web client needs to query by them (indexes can be added later).

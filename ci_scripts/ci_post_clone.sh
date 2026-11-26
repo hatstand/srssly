@@ -6,6 +6,15 @@ set -eu
 
 brew install xcodegen
 cd "$CI_PRIMARY_REPOSITORY_PATH"
+
+# Build number: Xcode Cloud's own counter, so every upload to App Store
+# Connect is unique and the binary's CFBundleVersion matches the build
+# shown in Xcode Cloud and TestFlight. Local builds keep project.yml's "1".
+if [ -n "${CI_BUILD_NUMBER:-}" ]; then
+    sed -i '' "s/CURRENT_PROJECT_VERSION: \".*\"/CURRENT_PROJECT_VERSION: \"$CI_BUILD_NUMBER\"/" project.yml
+    grep -q "CURRENT_PROJECT_VERSION: \"$CI_BUILD_NUMBER\"" project.yml
+fi
+
 xcodegen generate
 
 # Xcode Cloud builds with automatic package resolution off, so it needs a

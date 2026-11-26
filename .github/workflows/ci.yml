@@ -27,4 +27,6 @@ jobs:
       # XcodeGen rewrites the entitlements; without iCloud the app crashes at launch.
       - name: Check entitlements survived generation
         run: git diff --exit-code App/Srssly.entitlements && grep -q iCloud.com.purplehatstands.srssly App/Srssly.entitlements
+      - name: Check privacy manifest is bundled
+        run: grep -q "PrivacyInfo.xcprivacy in Resources" Srssly.xcodeproj/project.pbxproj
       - run: ./scripts/xcodebuild.sh test

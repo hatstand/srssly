@@ -27,6 +27,13 @@ targets:
     dependencies:
       - package: SrsslyCore
         products: [SrsslyCore, SrsslyStore]
+    # App/PrivacyInfo.xcprivacy (privacy manifest) is picked up from `sources`
+    # as a resource; CI checks it lands in Copy Bundle Resources.
+    #
+    # aps-environment stays `development`: exporting for App Store Connect
+    # re-signs with the distribution profile, which switches it (and the
+    # CloudKit environment) to production.
+    #
     # XcodeGen rewrites this file from `properties` on every run, so the
     # entitlements must live here: a bare `path` leaves it empty, and the app
     # crashes at launch creating its CKContainer.
@@ -44,6 +51,10 @@ targets:
         # Merged with the generated Info.plist; holds keys with no build setting.
         INFOPLIST_FILE: App/Info.plist
         INFOPLIST_KEY_CFBundleDisplayName: Srssly
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.news
+        # Export compliance: only Apple's HTTPS and CloudKit encryption, which
+        # is exempt, so App Store Connect stops asking for every build.
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
         # Single-size 1024px icon (light + dark) in App/Assets.xcassets; light and dark source art is in design/.
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # iOS requires a launch screen. An empty generated one is just the
