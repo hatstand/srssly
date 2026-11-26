@@ -58,6 +58,28 @@ final class LaunchTests: XCTestCase {
         waitForExpectations(timeout: 5)
     }
 
+    /// The list hides read articles, but one read while looking at the list
+    /// stays put until the list is told to hide it.
+    @MainActor
+    func testReadArticleStaysUntilHidden() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-SrsslySampleData", "-timelineFilter", "unread"]
+        app.launch()
+
+        let firstRow = app.descendants(matching: .any)["article-row"].firstMatch
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 5))
+        let title = firstRow.label
+        firstRow.swipeRight()
+        app.buttons["Read"].firstMatch.tap()
+        XCTAssertEqual(firstRow.label, title, "Reading an article shouldn't pull it out of the list")
+
+        app.buttons["Filter"].firstMatch.tap()
+        app.buttons["Hide Read"].firstMatch.tap()
+        let hidden = NSPredicate { _, _ in firstRow.label != title }
+        expectation(for: hidden, evaluatedWith: nil)
+        waitForExpectations(timeout: 5)
+    }
+
     /// Records launch time. Set a baseline in Xcode (Report navigator) to make
     /// this fail on regressions; on CI it just records.
     @MainActor
