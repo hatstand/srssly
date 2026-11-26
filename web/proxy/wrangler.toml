@@ -1,0 +1,8 @@
+# Deploy with: npx wrangler deploy --config proxy/wrangler.toml (from web/)
+name = "srssly-proxy"
+main = "worker.ts"
+compatibility_date = "2026-11-01"
+
+[vars]
+# Comma-separated origins of deployed web clients, e.g. "https://srssly.example".
+ALLOWED_ORIGINS = "http://localhost:5173"
