@@ -30,9 +30,10 @@ use keys::{recovery, wrap};
 pub use account::{AccountId, AccountKeys, PasskeyInfo};
 pub use error::{Error, Result};
 pub use keys::{DataKey, DerivedKeys, KeyCheck, RootSecret};
+#[cfg(any(test, feature = "soft-passkey"))]
+pub use passkey::SoftPasskey;
 pub use passkey::{
-    CredentialIdHash, PRF_INPUT, PasskeyKeyPair, PrfAuthenticator, PrfOutput, SoftPasskey,
-    ctap_hmac_secret_salt,
+    CredentialIdHash, PRF_INPUT, PasskeyKeyPair, PrfAuthenticator, PrfOutput, ctap_hmac_secret_salt,
 };
 pub use recovery::RecoveryKey;
 pub use wrap::WrappedSecret;
