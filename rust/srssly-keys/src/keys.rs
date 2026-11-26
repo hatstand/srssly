@@ -9,6 +9,7 @@ use crate::account::AccountId;
 use crate::random_bytes;
 
 // Children of this module can read the root secret's bytes; nothing else can.
+pub(crate) mod recovery;
 pub(crate) mod wrap;
 
 /// The account's root secret: 32 random bytes from which every other key derives.
