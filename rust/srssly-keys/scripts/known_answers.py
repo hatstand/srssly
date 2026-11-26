@@ -21,7 +21,7 @@ def hkdf(salt, ikm, info, n):
     return out[:n]
 
 
-root = bytes([1] * 32)
+root = bytes(range(32))
 acct = bytes([7] * 16)
 salt = b"srssly/v1/root/" + acct
 results = {
@@ -30,7 +30,7 @@ results = {
 
 # The same values are pinned in the Rust tests.
 EXPECTED = {
-    "key_check": "569b212342900e7981bf6ebcc19865bc",
+    "key_check": "7d745637d079f47074bfa7e55b88b32e",
 }
 
 failed = False
