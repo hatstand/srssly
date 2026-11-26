@@ -31,8 +31,8 @@ public enum ArticleExtractor {
         do {
             let title = pageTitle(doc)
             try removeChrome(body)
-            guard let root = try topCandidate(body) else { return nil }
-            let content = try assemble(root, doc: doc)
+            guard let candidate = try topCandidate(body) else { return nil }
+            let content = try assemble(candidate, doc: doc)
             try clean(content, title: title)
             try absolutize(content, base: pageURL)
             if let lead = leadImage(doc, base: pageURL), try !startsWithImage(content) {
@@ -116,7 +116,14 @@ public enum ArticleExtractor {
     ]
 
     /// The element whose paragraphs make it the article.
-    private static func topCandidate(_ body: Element) throws -> Element? {
+    struct Candidate {
+        var element: Element
+        var score: Double
+        /// Every scored element's score, less its share of link text.
+        var scores: [ObjectIdentifier: Double]
+    }
+
+    private static func topCandidate(_ body: Element) throws -> Candidate? {
         var scores: [ObjectIdentifier: Double] = [:]
         var elements: [ObjectIdentifier: Element] = [:]
 
@@ -160,7 +167,26 @@ public enum ArticleExtractor {
             scores[key] = adjusted
             if best == nil || adjusted > best!.score { best = (e, adjusted) }
         }
-        guard var top = best?.element else { return nil }
+        guard var top = best?.element, let topScore = best?.score else { return nil }
+
+        // As in Readability: when other strong candidates (sections of a
+        // post split into separate blocks) share an ancestor with the best
+        // one, that ancestor is the article.
+        let alternatives = scores
+            .filter { $0.value >= topScore * 0.75 && $0.key != ObjectIdentifier(top) }
+            .sorted { $0.value > $1.value }
+            .prefix(4)
+            .compactMap { elements[$0.key] }
+        if alternatives.count >= 3 {
+            let ancestorSets = alternatives.map { Set(ancestors(of: $0).map(ObjectIdentifier.init)) }
+            for ancestor in ancestors(of: top) where ancestor.tagNameNormal() != "body" {
+                let id = ObjectIdentifier(ancestor)
+                if ancestorSets.filter({ $0.contains(id) }).count >= 3 {
+                    top = ancestor
+                    break
+                }
+            }
+        }
 
         // A wrapper with nothing else in it is the same article, and its
         // siblings (a lead image, say) are worth considering.
@@ -168,7 +194,17 @@ public enum ArticleExtractor {
               parent.children().size() == 1 {
             top = parent
         }
-        return top
+        return Candidate(element: top, score: topScore, scores: scores)
+    }
+
+    private static func ancestors(of e: Element) -> [Element] {
+        var result: [Element] = []
+        var p = e.parent()
+        while let node = p, node.tagNameNormal() != "html" {
+            result.append(node)
+            p = node.parent()
+        }
+        return result
     }
 
     private static func classWeight(_ e: Element) -> Double {
@@ -188,14 +224,19 @@ public enum ArticleExtractor {
     }
 
     /// The top candidate plus siblings that belong with it: a lead image
-    /// just before it, or paragraphs split off into their own containers.
-    private static func assemble(_ top: Element, doc: Document) throws -> Element {
+    /// just before it, or sections and paragraphs split off into their own
+    /// containers.
+    private static func assemble(_ candidate: Candidate, doc: Document) throws -> Element {
+        let top = candidate.element
         let container = try doc.createElement("div")
         guard let parent = top.parent(), parent.tagNameNormal() != "body" else {
             try container.appendChild(top)
             return container
         }
         let topClass = (try? top.className()) ?? ""
+        // As in Readability: siblings scoring a fifth of the article are
+        // more of it (posts split into sections, an image with a caption).
+        let threshold = max(10, candidate.score * 0.2)
         let siblings = parent.children().array()
         let topIndex = siblings.firstIndex { $0 === top } ?? 0
         for (index, sibling) in siblings.enumerated() {
@@ -206,7 +247,11 @@ public enum ArticleExtractor {
             let tag = sibling.tagNameNormal()
             let text = try sibling.text()
             var keep = false
-            if !topClass.isEmpty, (try? sibling.className()) == topClass, text.count > 80 {
+            var score = candidate.scores[ObjectIdentifier(sibling)] ?? 0
+            if !topClass.isEmpty, (try? sibling.className()) == topClass { score += candidate.score * 0.2 }
+            if score >= threshold {
+                keep = true
+            } else if !topClass.isEmpty, (try? sibling.className()) == topClass, text.count > 80 {
                 keep = true
             } else if tag == "p", text.count > 80, linkDensity(sibling) < 0.25 {
                 keep = true
