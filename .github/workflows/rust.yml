@@ -1,0 +1,34 @@
+name: Rust
+
+on:
+  pull_request:
+    paths: ["rust/**", ".github/workflows/rust.yml"]
+  push:
+    branches: [main]
+    paths: ["rust/**", ".github/workflows/rust.yml"]
+
+concurrency:
+  group: rust-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Rust core tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup component add rustfmt clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+      - run: cargo build --locked --no-default-features
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Check test vectors against the Python reference
+        run: |
+          pip install cryptography
+          python srssly-keys/scripts/known_answers.py
