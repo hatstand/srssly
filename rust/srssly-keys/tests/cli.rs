@@ -318,6 +318,79 @@ fn verify_rejects_another_accounts_device() {
 }
 
 #[test]
+fn recovery_key_and_rotation() {
+    let e = Env::new();
+    e.new_passkey("a.json");
+    e.new_passkey("b.json");
+    let created = e.ok(&[
+        "create",
+        "--account",
+        "acct.json",
+        "--device",
+        "dev.json",
+        "--passkey",
+        "a.json",
+    ]);
+    e.ok(&[
+        "add-passkey",
+        "--account",
+        "acct.json",
+        "--device",
+        "dev.json",
+        "--passkey",
+        "b.json",
+    ]);
+
+    // The recovery key unlocks a new device.
+    let words = e.ok(&["recovery-key", "--device", "dev.json"])["words"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(words.split(' ').count(), 24);
+    e.ok(&[
+        "recover",
+        "--account",
+        "acct.json",
+        "--words",
+        &words,
+        "--device-out",
+        "recovered.json",
+    ]);
+    e.ok(&[
+        "verify",
+        "--account",
+        "acct.json",
+        "--device",
+        "recovered.json",
+    ]);
+
+    // Rotation keeps the account and passkeys but retires the old secret.
+    let rotated = e.ok(&["rotate", "--account", "acct.json", "--device", "dev.json"]);
+    assert_eq!(rotated["epoch"], 1);
+    assert_eq!(rotated["account_id"], created["account_id"]);
+    assert_ne!(rotated["auth_public_key"], created["auth_public_key"]);
+    e.ok(&["verify", "--account", "acct.json", "--device", "dev.json"]);
+    for pk in ["a.json", "b.json"] {
+        assert_eq!(
+            e.ok(&["unlock", "--account", "acct.json", "--passkey", pk])["epoch"],
+            1
+        );
+    }
+    let stale = [
+        "verify",
+        "--account",
+        "acct.json",
+        "--device",
+        "recovered.json",
+    ];
+    assert_eq!(e.err(&stale), "wrong_root_secret");
+    let old_words = ["recover", "--account", "acct.json", "--words", &words];
+    assert_eq!(e.err(&old_words), "wrong_root_secret");
+    let bad_words = ["recover", "--account", "acct.json", "--words", "not words"];
+    assert_eq!(e.err(&bad_words), "invalid_recovery_key");
+}
+
+#[test]
 fn errors_are_json_with_codes() {
     let e = Env::new();
     assert_eq!(
