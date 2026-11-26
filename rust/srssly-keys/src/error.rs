@@ -3,6 +3,12 @@ use thiserror::Error;
 /// Errors from key management operations.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum Error {
+    /// The PRF output doesn't belong to the passkey this wrapped secret was sealed to.
+    #[error("this passkey does not match the stored passkey record")]
+    WrongPasskey,
+    /// Decryption failed: the data was tampered with or belongs to another account or epoch.
+    #[error("decryption failed")]
+    DecryptionFailed,
     /// The authenticator failed to produce a PRF output.
     #[error("authenticator error: {0}")]
     Authenticator(String),
@@ -15,6 +21,8 @@ impl Error {
     /// A stable snake_case name for scripts and other languages to match on.
     pub fn code(&self) -> &'static str {
         match self {
+            Error::WrongPasskey => "wrong_passkey",
+            Error::DecryptionFailed => "decryption_failed",
             Error::Authenticator(_) => "authenticator",
             Error::Malformed(_) => "malformed",
         }

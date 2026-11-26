@@ -8,6 +8,9 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 use crate::account::AccountId;
 use crate::random_bytes;
 
+// Children of this module can read the root secret's bytes; nothing else can.
+pub(crate) mod wrap;
+
 /// The account's root secret: 32 random bytes from which every other key derives.
 ///
 /// There is deliberately no public way to read the bytes back out, so they
@@ -24,6 +27,12 @@ impl RootSecret {
     /// `None` if the bytes are obviously not random (see [`looks_random`]).
     pub fn from_bytes(bytes: [u8; 32]) -> Option<Self> {
         looks_random(&bytes).then_some(Self(bytes))
+    }
+
+    /// Private: only this module and its children (which seal the secret) can
+    /// read the bytes.
+    fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
     }
 
     /// `HKDF-SHA256(salt = "srssly/v1/root/" || account, ikm = root)`.
