@@ -9,8 +9,8 @@ mod error;
 mod keys;
 mod passkey;
 
-// Keep `crate::wrap` as a short path inside the crate.
-use keys::wrap;
+// Keep `crate::recovery` and `crate::wrap` as short paths inside the crate.
+use keys::{recovery, wrap};
 
 pub use account::AccountId;
 pub use error::{Error, Result};
@@ -20,6 +20,7 @@ pub use passkey::SoftPasskey;
 pub use passkey::{
     CredentialIdHash, PRF_INPUT, PasskeyKeyPair, PrfAuthenticator, PrfOutput, ctap_hmac_secret_salt,
 };
+pub use recovery::RecoveryKey;
 pub use wrap::WrappedSecret;
 
 pub(crate) fn random_bytes<const N: usize>() -> [u8; N] {
