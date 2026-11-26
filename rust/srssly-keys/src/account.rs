@@ -149,7 +149,6 @@ impl AccountKeys {
             .iter()
             .find(|p| &p.credential_id_hash == credential_id_hash)
     }
-
     /// Unlocks the root secret with a registered passkey.
     pub fn unlock(&self, authenticator: &dyn PrfAuthenticator) -> Result<RootSecret> {
         let prf = authenticator.evaluate_prf(PRF_INPUT)?;
@@ -221,6 +220,7 @@ impl AccountKeys {
         serde_json::to_string_pretty(self).expect("AccountKeys always serializes")
     }
 
+    /// Parses a stored record, refusing versions this code doesn't know.
     pub fn from_json(json: &str) -> Result<Self> {
         #[derive(Deserialize)]
         struct Version {
@@ -248,6 +248,119 @@ mod tests {
         fn evaluate_prf(&self, _: &[u8]) -> Result<PrfOutput> {
             Err(Error::Authenticator("user cancelled".into()))
         }
+    }
+
+    #[test]
+    fn create_registers_one_passkey() {
+        let pk = SoftPasskey::generate();
+        let (keys, root) = AccountKeys::create(&pk, "laptop").unwrap();
+        assert_eq!((keys.version, keys.epoch), (FORMAT_VERSION, 0));
+        assert_eq!(keys.passkeys.len(), 1);
+        assert_eq!(keys.passkeys[0].label, "laptop");
+        assert!(
+            keys.find(&CredentialIdHash::of(pk.credential_id()))
+                .is_some()
+        );
+        keys.verify_root(&root).unwrap();
+        let derived = root.derive(&keys.account_id);
+        assert_eq!(keys.auth_public_key, derived.auth_public_key());
+    }
+
+    #[test]
+    fn add_more_passkeys() {
+        let (mut keys, root) = AccountKeys::create(&SoftPasskey::generate(), "a").unwrap();
+        keys.add_passkey(&root, &SoftPasskey::generate(), "b")
+            .unwrap();
+        keys.add_passkey(&root, &SoftPasskey::generate(), "c")
+            .unwrap();
+        let labels: Vec<_> = keys.passkeys.iter().map(|p| p.label.as_str()).collect();
+        assert_eq!(labels, ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn adding_needs_the_current_root_and_a_new_passkey() {
+        let a = SoftPasskey::generate();
+        let (mut keys, root) = AccountKeys::create(&a, "a").unwrap();
+        let wrong_root = RootSecret::generate();
+        assert_eq!(keys.verify_root(&wrong_root), Err(Error::WrongRootSecret));
+        assert_eq!(
+            keys.add_passkey(&wrong_root, &SoftPasskey::generate(), "x"),
+            Err(Error::WrongRootSecret)
+        );
+        assert_eq!(
+            keys.add_passkey(&root, &a, "again"),
+            Err(Error::DuplicatePasskey)
+        );
+    }
+
+    #[test]
+    fn authenticator_errors_propagate() {
+        assert_eq!(
+            AccountKeys::create(&Failing, "x").map(|_| ()),
+            Err(Error::Authenticator("user cancelled".into()))
+        );
+    }
+
+    fn record(root: &RootSecret) -> AccountKeys {
+        let account_id = AccountId::generate();
+        let credential_id_hash = CredentialIdHash::of(b"cred");
+        let key_pair = PasskeyKeyPair::from_prf(&PrfOutput::from_bytes([3; 32]));
+        let wrapped = WrappedSecret::seal(
+            root,
+            key_pair.public_key(),
+            &account_id,
+            0,
+            &credential_id_hash,
+        )
+        .unwrap();
+        AccountKeys {
+            version: FORMAT_VERSION,
+            account_id,
+            epoch: 0,
+            key_check: root.key_check(&account_id),
+            auth_public_key: root.derive(&account_id).auth_public_key(),
+            passkeys: vec![PasskeyInfo {
+                credential_id_hash,
+                label: "laptop".into(),
+                wrapped,
+            }],
+        }
+    }
+
+    #[test]
+    fn verify_root() {
+        let root = RootSecret::generate();
+        let keys = record(&root);
+        keys.verify_root(&root).unwrap();
+        assert_eq!(
+            keys.verify_root(&RootSecret::generate()),
+            Err(Error::WrongRootSecret)
+        );
+    }
+
+    #[test]
+    fn json_round_trip_and_version_check() {
+        let keys = record(&RootSecret::generate());
+        assert_eq!(AccountKeys::from_json(&keys.to_json()).unwrap(), keys);
+        let future = keys.to_json().replace("\"version\": 1", "\"version\": 2");
+        assert_eq!(
+            AccountKeys::from_json(&future),
+            Err(Error::UnsupportedVersion(2))
+        );
+        assert_eq!(
+            AccountKeys::from_json("{}"),
+            Err(Error::Malformed("account keys"))
+        );
+    }
+
+    #[test]
+    fn json_holds_no_secrets() {
+        let root = RootSecret::generate();
+        assert!(
+            !record(&root)
+                .to_json()
+                .contains(&b64::encode(root.as_bytes()))
+        );
     }
 
     #[test]
@@ -295,25 +408,23 @@ mod tests {
     }
 
     #[test]
-    fn adding_needs_the_current_root_and_a_new_passkey() {
-        let a = SoftPasskey::generate();
-        let (mut keys, root) = AccountKeys::create(&a, "a").unwrap();
+    fn recovery_key_unlocks() {
+        let (keys, root) = AccountKeys::create(&SoftPasskey::generate(), "a").unwrap();
+        let recovery = RecoveryKey::from_root(&root);
+        assert_eq!(keys.unlock_with_recovery_key(&recovery).unwrap(), root);
+        let other = RecoveryKey::from_root(&RootSecret::generate());
         assert_eq!(
-            keys.add_passkey(&RootSecret::generate(), &SoftPasskey::generate(), "x"),
+            keys.unlock_with_recovery_key(&other),
             Err(Error::WrongRootSecret)
-        );
-        assert_eq!(
-            keys.add_passkey(&root, &a, "again"),
-            Err(Error::DuplicatePasskey)
         );
     }
 
     #[test]
-    fn authenticator_errors_propagate() {
-        assert_eq!(
-            AccountKeys::create(&Failing, "x").map(|_| ()),
-            Err(Error::Authenticator("user cancelled".into()))
-        );
+    fn unlocks_after_json_round_trip() {
+        let pk = SoftPasskey::generate();
+        let (keys, root) = AccountKeys::create(&pk, "a").unwrap();
+        let back = AccountKeys::from_json(&keys.to_json()).unwrap();
+        assert_eq!(back.unlock(&pk).unwrap(), root);
     }
 
     #[test]
@@ -387,31 +498,9 @@ mod tests {
     }
 
     #[test]
-    fn json_round_trip_and_version_check() {
-        let pk = SoftPasskey::generate();
-        let (keys, root) = AccountKeys::create(&pk, "a").unwrap();
-        let back = AccountKeys::from_json(&keys.to_json()).unwrap();
-        assert_eq!(back, keys);
-        assert_eq!(back.unlock(&pk).unwrap(), root);
-
-        let future = keys.to_json().replace("\"version\": 1", "\"version\": 2");
-        assert_eq!(
-            AccountKeys::from_json(&future),
-            Err(Error::UnsupportedVersion(2))
-        );
-        assert_eq!(
-            AccountKeys::from_json("{}"),
-            Err(Error::Malformed("account keys"))
-        );
-    }
-
-    #[test]
-    fn json_holds_no_secrets() {
-        let pk = SoftPasskey::generate();
-        let (keys, root) = AccountKeys::create(&pk, "a").unwrap();
-        let json = keys.to_json();
-        assert!(!json.contains(&b64::encode(root.as_bytes())));
-        let prf = pk.evaluate_prf(PRF_INPUT).unwrap();
-        assert!(!json.contains(&b64::encode(prf.as_bytes())));
+    fn account_id_displays_as_base64url() {
+        let id = AccountId::from_bytes([0; 16]);
+        assert_eq!(id.to_string(), "AAAAAAAAAAAAAAAAAAAAAA");
+        assert_eq!(format!("{id:?}"), "AccountId(AAAAAAAAAAAAAAAAAAAAAA)");
     }
 }

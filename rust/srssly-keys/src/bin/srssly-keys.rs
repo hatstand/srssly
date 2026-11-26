@@ -47,6 +47,16 @@ enum Command {
         #[arg(long, default_value = "passkey")]
         label: String,
     },
+    /// Unlock the root secret with a passkey.
+    Unlock {
+        #[arg(long)]
+        account: PathBuf,
+        #[command(flatten)]
+        passkey: PasskeyArgs,
+        /// Save the unlocked root secret here.
+        #[arg(long)]
+        device_out: Option<PathBuf>,
+    },
     /// Register another passkey, using an unlocked device.
     AddPasskey {
         #[arg(long)]
@@ -57,16 +67,6 @@ enum Command {
         passkey: PasskeyArgs,
         #[arg(long, default_value = "passkey")]
         label: String,
-    },
-    /// Unlock the root secret with a passkey.
-    Unlock {
-        #[arg(long)]
-        account: PathBuf,
-        #[command(flatten)]
-        passkey: PasskeyArgs,
-        /// Save the unlocked root secret here.
-        #[arg(long)]
-        device_out: Option<PathBuf>,
     },
     /// List registered passkeys.
     List {
@@ -158,7 +158,8 @@ impl PasskeyArgs {
             self.credential_id.as_deref().unwrap_or_default(),
             "credential ID",
         )?;
-        let prf: [u8; 32] = decode(self.prf.as_deref().unwrap_or_default(), "PRF output")?
+        let prf = decode(self.prf.as_deref().unwrap_or_default(), "PRF output")?;
+        let prf: [u8; 32] = prf
             .try_into()
             .map_err(|_| CliError::usage("PRF output must be 32 bytes"))?;
         Ok((id, PrfOutput::from_bytes(prf)))
@@ -197,9 +198,18 @@ struct CliError {
 
 impl CliError {
     fn usage(message: impl Into<String>) -> Self {
+        let message = message.into();
         Self {
             code: "usage",
-            message: message.into(),
+            message,
+        }
+    }
+
+    fn io(path: &Path, e: impl std::fmt::Display) -> Self {
+        let message = format!("{}: {e}", path.display());
+        Self {
+            code: "io",
+            message,
         }
     }
 }
@@ -213,27 +223,19 @@ impl From<Error> for CliError {
     }
 }
 
-fn decode(s: &str, what: &str) -> Result<Vec<u8>, CliError> {
-    B64.decode(s)
-        .map_err(|_| CliError::usage(format!("{what} is not valid base64url")))
+fn read(path: &Path) -> Result<String, CliError> {
+    fs::read_to_string(path).map_err(|e| CliError::io(path, e))
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, CliError> {
-    let text = fs::read_to_string(path).map_err(|e| CliError {
-        code: "io",
-        message: format!("{}: {e}", path.display()),
-    })?;
-    serde_json::from_str(&text).map_err(|e| CliError {
+    serde_json::from_str(&read(path)?).map_err(|e| CliError {
         code: "malformed",
         message: format!("{}: {e}", path.display()),
     })
 }
 
 fn write(path: &Path, contents: &str) -> Result<(), CliError> {
-    fs::write(path, contents).map_err(|e| CliError {
-        code: "io",
-        message: format!("{}: {e}", path.display()),
-    })
+    fs::write(path, contents).map_err(|e| CliError::io(path, e))
 }
 
 fn write_json(path: &Path, value: &impl Serialize) -> Result<(), CliError> {
@@ -243,12 +245,13 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<(), CliError> {
     )
 }
 
+fn decode(s: &str, what: &str) -> Result<Vec<u8>, CliError> {
+    B64.decode(s)
+        .map_err(|_| CliError::usage(format!("{what} is not valid base64url")))
+}
+
 fn read_account(path: &Path) -> Result<AccountKeys, CliError> {
-    let text = fs::read_to_string(path).map_err(|e| CliError {
-        code: "io",
-        message: format!("{}: {e}", path.display()),
-    })?;
-    Ok(AccountKeys::from_json(&text)?)
+    Ok(AccountKeys::from_json(&read(path)?)?)
 }
 
 fn write_account(path: &Path, keys: &AccountKeys) -> Result<(), CliError> {
@@ -296,19 +299,6 @@ fn run(cli: Cli) -> Result<Value, CliError> {
             write_json(&device, &Device::new(&keys, &root))?;
             Ok(summary(&keys))
         }
-        Command::AddPasskey {
-            account,
-            device,
-            passkey,
-            label,
-        } => {
-            let mut keys = read_account(&account)?;
-            let root = read_json::<Device>(&device)?.root()?;
-            let (id, prf) = passkey.resolve()?;
-            keys.add_passkey_with_prf(&root, &id, &prf, &label)?;
-            write_account(&account, &keys)?;
-            Ok(summary(&keys))
-        }
         Command::Unlock {
             account,
             passkey,
@@ -320,6 +310,19 @@ fn run(cli: Cli) -> Result<Value, CliError> {
             if let Some(path) = device_out {
                 write_json(&path, &Device::new(&keys, &root))?;
             }
+            Ok(summary(&keys))
+        }
+        Command::AddPasskey {
+            account,
+            device,
+            passkey,
+            label,
+        } => {
+            let mut keys = read_account(&account)?;
+            let root = read_json::<Device>(&device)?.root()?;
+            let (id, prf) = passkey.resolve()?;
+            keys.add_passkey_with_prf(&root, &id, &prf, &label)?;
+            write_account(&account, &keys)?;
             Ok(summary(&keys))
         }
         Command::List { account } => {

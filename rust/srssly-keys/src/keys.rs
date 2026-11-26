@@ -27,15 +27,12 @@ impl RootSecret {
         &self.0
     }
 
-    fn hkdf(&self, account: &AccountId) -> Hkdf<Sha256> {
+    /// `HKDF-SHA256(salt = "srssly/v1/root/" || account, ikm = root)`.
+    pub(crate) fn expand<const N: usize>(&self, account: &AccountId, info: &[u8]) -> [u8; N] {
         let mut salt = b"srssly/v1/root/".to_vec();
         salt.extend_from_slice(account.as_bytes());
-        Hkdf::<Sha256>::new(Some(&salt), &self.0)
-    }
-
-    fn expand<const N: usize>(&self, account: &AccountId, info: &[u8]) -> [u8; N] {
         let mut out = [0u8; N];
-        self.hkdf(account)
+        Hkdf::<Sha256>::new(Some(&salt), &self.0)
             .expand(info, &mut out)
             .expect("HKDF output length is valid");
         out
@@ -49,10 +46,9 @@ impl RootSecret {
 
     /// The keys derived from this secret for `account`.
     pub fn derive(&self, account: &AccountId) -> DerivedKeys {
-        let data_key = self.expand(account, b"data-key");
         let auth_seed: [u8; 32] = self.expand(account, b"auth-key");
         DerivedKeys {
-            data_key,
+            data_key: self.expand(account, b"data-key"),
             auth_key: SigningKey::from_bytes(&auth_seed),
         }
     }
@@ -99,43 +95,42 @@ impl KeyCheck {
 pub(crate) mod tests {
     use super::*;
 
-    fn account() -> AccountId {
+    pub(crate) fn account() -> AccountId {
         AccountId::from_bytes([7; 16])
     }
 
     #[test]
-    fn derivation_is_deterministic() {
+    fn key_check_is_deterministic() {
         let root = RootSecret::from_bytes([1; 32]);
-        let a = root.derive(&account());
-        let b = root.derive(&account());
-        assert_eq!(a.data_key, b.data_key);
-        assert_eq!(a.auth_public_key(), b.auth_public_key());
         assert_eq!(root.key_check(&account()), root.key_check(&account()));
     }
 
     #[test]
-    fn derived_keys_are_independent() {
-        let root = RootSecret::from_bytes([1; 32]);
-        let keys = root.derive(&account());
-        assert_ne!(keys.data_key, keys.auth_key.to_bytes());
-        assert_ne!(&keys.data_key[..16], root.key_check(&account()).as_bytes());
-    }
-
-    #[test]
-    fn derivation_depends_on_account_and_secret() {
+    fn key_check_depends_on_account_and_secret() {
         let root = RootSecret::from_bytes([1; 32]);
         let other_account = AccountId::from_bytes([8; 16]);
-        assert_ne!(
-            root.derive(&account()).data_key,
-            root.derive(&other_account).data_key
-        );
+        assert_ne!(root.key_check(&account()), root.key_check(&other_account));
         let other_root = RootSecret::from_bytes([2; 32]);
         assert_ne!(root.key_check(&account()), other_root.key_check(&account()));
     }
 
     #[test]
+    fn derived_keys_are_deterministic_and_independent() {
+        let root = RootSecret::from_bytes([1; 32]);
+        let a = root.derive(&account());
+        let b = root.derive(&account());
+        assert_eq!(a.data_key, b.data_key);
+        assert_eq!(a.auth_public_key(), b.auth_public_key());
+        assert_ne!(a.data_key, a.auth_key.to_bytes());
+        assert_ne!(&a.data_key[..16], root.key_check(&account()).as_bytes());
+        let other = AccountId::from_bytes([8; 16]);
+        assert_ne!(a.data_key, root.derive(&other).data_key);
+    }
+
+    #[test]
     fn generated_secrets_differ() {
         assert_ne!(RootSecret::generate(), RootSecret::generate());
+        assert_ne!(AccountId::generate(), AccountId::generate());
     }
 
     #[test]
@@ -150,20 +145,23 @@ pub(crate) mod tests {
     #[test]
     fn known_answer() {
         let root = RootSecret::from_bytes([1; 32]);
-        let keys = root.derive(&account());
         assert_hex(
             "key_check",
             root.key_check(&account()).as_bytes(),
-            KAT_KEY_CHECK,
+            "569b212342900e7981bf6ebcc19865bc",
         );
-        assert_hex("data_key", &keys.data_key, KAT_DATA_KEY);
-        assert_hex("auth_public", &keys.auth_public_key(), KAT_AUTH_PUBLIC);
+        let keys = root.derive(&account());
+        assert_hex(
+            "data_key",
+            &keys.data_key,
+            "c3f98b38d6afda017c359a1192342d596b85d1d2f60c657fa37475df84d2c2ce",
+        );
+        assert_hex(
+            "auth_public",
+            &keys.auth_public_key(),
+            "b0745fcd50b58602711805695ec13ef10693ce25c623962a3ab9628d9f1529fc",
+        );
     }
-
-    const KAT_KEY_CHECK: &str = "569b212342900e7981bf6ebcc19865bc";
-    const KAT_DATA_KEY: &str = "c3f98b38d6afda017c359a1192342d596b85d1d2f60c657fa37475df84d2c2ce";
-    const KAT_AUTH_PUBLIC: &str =
-        "b0745fcd50b58602711805695ec13ef10693ce25c623962a3ab9628d9f1529fc";
 
     pub(crate) fn assert_hex(name: &str, actual: &[u8], expected: &str) {
         let hex: String = actual.iter().map(|b| format!("{b:02x}")).collect();

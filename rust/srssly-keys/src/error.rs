@@ -6,6 +6,9 @@ pub enum Error {
     /// The PRF output doesn't belong to the passkey this wrapped secret was sealed to.
     #[error("this passkey does not match the stored passkey record")]
     WrongPasskey,
+    /// Decryption failed: the data was tampered with or belongs to another account or epoch.
+    #[error("decryption failed")]
+    DecryptionFailed,
     /// No passkey with this credential ID is registered on the account.
     #[error("no passkey with this credential ID is registered")]
     UnknownPasskey,
@@ -15,9 +18,6 @@ pub enum Error {
     /// Removing the passkey would leave the account with none.
     #[error("cannot remove the last passkey")]
     LastPasskey,
-    /// Decryption failed: the data was tampered with or belongs to another account or epoch.
-    #[error("decryption failed")]
-    DecryptionFailed,
     /// The root secret doesn't match the account's key check.
     #[error("this root secret does not belong to the account at its current epoch")]
     WrongRootSecret,
@@ -40,10 +40,10 @@ impl Error {
     pub fn code(&self) -> &'static str {
         match self {
             Error::WrongPasskey => "wrong_passkey",
+            Error::DecryptionFailed => "decryption_failed",
             Error::UnknownPasskey => "unknown_passkey",
             Error::DuplicatePasskey => "duplicate_passkey",
             Error::LastPasskey => "last_passkey",
-            Error::DecryptionFailed => "decryption_failed",
             Error::WrongRootSecret => "wrong_root_secret",
             Error::InvalidRecoveryKey(_) => "invalid_recovery_key",
             Error::UnsupportedVersion(_) => "unsupported_version",

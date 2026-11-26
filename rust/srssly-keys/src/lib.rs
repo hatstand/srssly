@@ -35,7 +35,6 @@ pub use passkey::{
 };
 pub use recovery::RecoveryKey;
 pub use wrap::WrappedSecret;
-
 /// Format version of every serialized structure in this crate.
 pub const FORMAT_VERSION: u32 = 1;
 

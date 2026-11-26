@@ -50,10 +50,9 @@ impl fmt::Debug for PrfOutput {
     }
 }
 
-/// Something that holds a passkey and can evaluate its WebAuthn PRF.
-///
-/// [`SoftPasskey`] implements it in software. Hardware security keys, Touch
-/// ID and platform passkeys are further implementations.
+/// Something that holds a passkey and can evaluate its WebAuthn PRF:
+/// a software passkey for tests, a hardware security key, Touch ID or a
+/// platform passkey API.
 pub trait PrfAuthenticator {
     /// The WebAuthn credential ID.
     fn credential_id(&self) -> &[u8];
@@ -131,10 +130,9 @@ impl CredentialIdHash {
 
     pub fn from_base64url(s: &str) -> Result<Self> {
         let bytes = b64::decode(s).ok_or(Error::Malformed("credential ID hash"))?;
+        let bytes = bytes.try_into();
         Ok(Self(
-            bytes
-                .try_into()
-                .map_err(|_| Error::Malformed("credential ID hash"))?,
+            bytes.map_err(|_| Error::Malformed("credential ID hash"))?,
         ))
     }
 }
@@ -148,6 +146,8 @@ pub struct PasskeyKeyPair {
 }
 
 impl PasskeyKeyPair {
+    /// RFC 9180 `DeriveKeyPair` from `HKDF-SHA256(salt =
+    /// "srssly/v1/passkey-kem", ikm = PRF output, info = "x25519")`.
     pub fn from_prf(prf: &PrfOutput) -> Self {
         let mut ikm = [0u8; 32];
         Hkdf::<Sha256>::new(Some(b"srssly/v1/passkey-kem"), prf.as_bytes())
@@ -170,12 +170,11 @@ mod tests {
 
     #[test]
     fn ctap_salt_matches_webauthn_definition() {
-        let mut expected = Sha256::new();
-        expected.update(b"WebAuthn PRF\x00");
-        expected.update(PRF_INPUT);
-        let expected: [u8; 32] = expected.finalize().into();
-        assert_eq!(ctap_hmac_secret_salt(PRF_INPUT), expected);
+        // SHA-256("WebAuthn PRF\0srssly/v1/passkey-prf"), from `scripts/known_answers.py`.
+        crate::keys::tests::assert_hex("ctap_salt", &ctap_hmac_secret_salt(PRF_INPUT), CTAP_SALT);
     }
+
+    const CTAP_SALT: &str = "09cfa2c104ea19b7a59f9472b2b6fd18194db1b560fa3bff1add23bfdd921a42";
 
     #[test]
     fn soft_passkey_prf_is_deterministic_per_input() {
@@ -213,17 +212,37 @@ mod tests {
         );
     }
 
+    /// Expected value from `scripts/known_answers.py`, which implements
+    /// CTAP2 hmac-secret independently.
     #[test]
-    fn key_pair_is_deterministic() {
-        let prf = PrfOutput::from_bytes([3; 32]);
-        assert_eq!(
-            PasskeyKeyPair::from_prf(&prf).public_key(),
-            PasskeyKeyPair::from_prf(&prf).public_key()
+    fn soft_passkey_known_answer() {
+        let pk = SoftPasskey::from_parts(b"cred".to_vec(), [9; 32]);
+        crate::keys::tests::assert_hex(
+            "prf",
+            pk.evaluate_prf(PRF_INPUT).unwrap().as_bytes(),
+            "0763ce60a3fe189c114c48cf3a5ef43bbe48429e10c6384a67de5ead8a96e1f9",
         );
+    }
+
+    #[test]
+    fn key_pair_is_deterministic_per_prf() {
+        let prf = PrfOutput::from_bytes([3; 32]);
         let other = PrfOutput::from_bytes([4; 32]);
-        assert_ne!(
+        let public = |p| *PasskeyKeyPair::from_prf(p).public_key();
+        assert_eq!(public(&prf), public(&prf));
+        assert_ne!(public(&prf), public(&other));
+    }
+
+    /// Expected value from `scripts/known_answers.py`, which implements
+    /// RFC 9180 DeriveKeyPair independently.
+    #[test]
+    fn key_pair_known_answer() {
+        let pk = SoftPasskey::from_parts(b"cred".to_vec(), [9; 32]);
+        let prf = pk.evaluate_prf(PRF_INPUT).unwrap();
+        crate::keys::tests::assert_hex(
+            "passkey_public",
             PasskeyKeyPair::from_prf(&prf).public_key(),
-            PasskeyKeyPair::from_prf(&other).public_key()
+            "3819b8a928132364538f0874ebacc1d03b551b8e2d1c3c0af8163d0209babd3e",
         );
     }
 
@@ -235,33 +254,16 @@ mod tests {
             h
         );
         assert!(CredentialIdHash::from_base64url("short").is_err());
-    }
-
-    /// Expected values from `scripts/known_answers.py`, an independent
-    /// implementation of the CTAP salt, hmac-secret and RFC 9180 DeriveKeyPair.
-    #[test]
-    fn known_answer() {
-        let pk = SoftPasskey::from_parts(b"cred".to_vec(), [9; 32]);
-        let prf = pk.evaluate_prf(PRF_INPUT).unwrap();
-        crate::keys::tests::assert_hex(
-            "prf",
-            prf.as_bytes(),
-            "0763ce60a3fe189c114c48cf3a5ef43bbe48429e10c6384a67de5ead8a96e1f9",
-        );
-        crate::keys::tests::assert_hex(
-            "passkey_public",
-            PasskeyKeyPair::from_prf(&prf).public_key(),
-            "3819b8a928132364538f0874ebacc1d03b551b8e2d1c3c0af8163d0209babd3e",
-        );
+        assert!(CredentialIdHash::from_base64url("!!").is_err());
     }
 
     #[test]
     fn debug_hides_secrets() {
-        let pk = SoftPasskey::from_parts(vec![1, 2], [9; 32]);
-        assert!(!format!("{pk:?}").contains("cred_random"));
         assert_eq!(
             format!("{:?}", PrfOutput::from_bytes([1; 32])),
             "PrfOutput(..)"
         );
+        let pk = SoftPasskey::from_parts(vec![1, 2], [9; 32]);
+        assert!(!format!("{pk:?}").contains("cred_random"));
     }
 }
