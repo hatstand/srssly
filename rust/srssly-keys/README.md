@@ -14,7 +14,9 @@ cargo run -q -- --help                       # the CLI
 ## How it works
 
 Each account has one random 32-byte **root secret**. It never leaves a device
-unencrypted. The relay stores an `AccountKeys` record that is safe for it to
+unencrypted. `RootSecret` has no public way to read its bytes; code that must
+store them (the platform keychain, the CLI's test device file) enables the
+`export-root-secret` feature and calls `RootSecret::export`. The relay stores an `AccountKeys` record that is safe for it to
 see: public keys, a key check and sealed secrets.
 
 | Piece | How it's made |
