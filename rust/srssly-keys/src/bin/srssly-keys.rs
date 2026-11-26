@@ -15,10 +15,13 @@ use std::process::ExitCode;
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
-use clap::{Parser, Subcommand};
-use serde::Serialize;
+use clap::{Args, Parser, Subcommand};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use srssly_keys::{CredentialIdHash, PrfAuthenticator, SoftPasskey};
+use srssly_keys::{
+    AccountId, AccountKeys, CredentialIdHash, Error, PRF_INPUT, PrfAuthenticator, PrfOutput,
+    RootSecret, SoftPasskey,
+};
 
 #[derive(Parser)]
 #[command(name = "srssly-keys", version, about)]
@@ -32,6 +35,18 @@ enum Command {
     /// Software passkeys for testing.
     #[command(subcommand)]
     Passkey(PasskeyCommand),
+    /// Create an account with a new root secret and its first passkey.
+    Create {
+        #[arg(long)]
+        account: PathBuf,
+        /// Where to save the unlocked root secret.
+        #[arg(long)]
+        device: PathBuf,
+        #[command(flatten)]
+        passkey: PasskeyArgs,
+        #[arg(long, default_value = "passkey")]
+        label: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -41,6 +56,40 @@ enum PasskeyCommand {
         #[arg(long)]
         out: PathBuf,
     },
+}
+
+/// The passkey to use: a software passkey file.
+#[derive(Args)]
+struct PasskeyArgs {
+    /// A software passkey file.
+    #[arg(long)]
+    passkey: PathBuf,
+}
+
+impl PasskeyArgs {
+    fn resolve(&self) -> Result<(Vec<u8>, PrfOutput), CliError> {
+        let pk: SoftPasskey = read_json(&self.passkey)?;
+        let prf = pk.evaluate_prf(PRF_INPUT)?;
+        Ok((pk.credential_id().to_vec(), prf))
+    }
+}
+
+/// The device file: an unlocked root secret. TEST ONLY.
+#[derive(Serialize, Deserialize)]
+struct Device {
+    account_id: AccountId,
+    epoch: u32,
+    root_secret: String,
+}
+
+impl Device {
+    fn new(keys: &AccountKeys, root: &RootSecret) -> Self {
+        Self {
+            account_id: keys.account_id,
+            epoch: keys.epoch,
+            root_secret: B64.encode(root.as_bytes()),
+        }
+    }
 }
 
 struct CliError {
@@ -58,6 +107,26 @@ impl CliError {
     }
 }
 
+impl From<Error> for CliError {
+    fn from(e: Error) -> Self {
+        Self {
+            code: e.code(),
+            message: e.to_string(),
+        }
+    }
+}
+
+fn read(path: &Path) -> Result<String, CliError> {
+    fs::read_to_string(path).map_err(|e| CliError::io(path, e))
+}
+
+fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, CliError> {
+    serde_json::from_str(&read(path)?).map_err(|e| CliError {
+        code: "malformed",
+        message: format!("{}: {e}", path.display()),
+    })
+}
+
 fn write(path: &Path, contents: &str) -> Result<(), CliError> {
     fs::write(path, contents).map_err(|e| CliError::io(path, e))
 }
@@ -69,6 +138,20 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<(), CliError> {
     )
 }
 
+fn write_account(path: &Path, keys: &AccountKeys) -> Result<(), CliError> {
+    write(path, &keys.to_json())
+}
+
+fn summary(keys: &AccountKeys) -> Value {
+    json!({
+        "account_id": keys.account_id.to_string(),
+        "epoch": keys.epoch,
+        "key_check": B64.encode(keys.key_check.as_bytes()),
+        "auth_public_key": B64.encode(keys.auth_public_key),
+        "passkeys": keys.passkeys.len(),
+    })
+}
+
 fn run(cli: Cli) -> Result<Value, CliError> {
     match cli.command {
         Command::Passkey(PasskeyCommand::New { out }) => {
@@ -78,6 +161,18 @@ fn run(cli: Cli) -> Result<Value, CliError> {
                 "credential_id": B64.encode(pk.credential_id()),
                 "credential_id_hash": CredentialIdHash::of(pk.credential_id()).to_base64url(),
             }))
+        }
+        Command::Create {
+            account,
+            device,
+            passkey,
+            label,
+        } => {
+            let (id, prf) = passkey.resolve()?;
+            let (keys, root) = AccountKeys::create_with_prf(&id, &prf, &label)?;
+            write_account(&account, &keys)?;
+            write_json(&device, &Device::new(&keys, &root))?;
+            Ok(summary(&keys))
         }
     }
 }
