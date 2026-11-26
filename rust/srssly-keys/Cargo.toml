@@ -23,7 +23,9 @@ zeroize = { version = "1.9.2", features = ["derive"] }
 [features]
 default = ["cli"]
 # The command-line tool for manual and automated key-management testing.
-cli = ["dep:clap"]
+cli = ["dep:clap", "export-root-secret"]
+# RootSecret::export, for code that must store the raw secret (keychain, CLI).
+export-root-secret = []
 
 [[bin]]
 name = "srssly-keys"

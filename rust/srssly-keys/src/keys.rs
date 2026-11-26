@@ -10,6 +10,9 @@ use crate::account::AccountId;
 use crate::{b64, random_bytes};
 
 /// The account's root secret: 32 random bytes from which every other key derives.
+///
+/// There is deliberately no public way to read the bytes back out, so they
+/// can't be logged or sent anywhere by accident.
 #[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct RootSecret([u8; 32]);
 
@@ -23,8 +26,17 @@ impl RootSecret {
         Self(bytes)
     }
 
-    pub fn as_bytes(&self) -> &[u8; 32] {
+    /// Only for sealing the secret (to a passkey, or as a recovery key).
+    pub(crate) fn as_bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+
+    /// The raw secret, for keeping it in the platform keychain (or the CLI's
+    /// test device file). Only built with the `export-root-secret` feature, so
+    /// code has to opt in before it can read the bytes.
+    #[cfg(feature = "export-root-secret")]
+    pub fn export(&self) -> zeroize::Zeroizing<[u8; 32]> {
+        zeroize::Zeroizing::new(self.0)
     }
 
     /// `HKDF-SHA256(salt = "srssly/v1/root/" || account, ikm = root)`.

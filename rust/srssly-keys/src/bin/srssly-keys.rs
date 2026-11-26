@@ -123,7 +123,7 @@ impl Device {
         Self {
             account_id: keys.account_id,
             epoch: keys.epoch,
-            root_secret: B64.encode(root.as_bytes()),
+            root_secret: B64.encode(root.export().as_slice()),
         }
     }
 }
