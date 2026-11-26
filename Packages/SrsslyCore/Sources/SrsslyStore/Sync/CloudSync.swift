@@ -56,6 +56,9 @@ public actor CloudSync: CKSyncEngineDelegate {
         try? FileManager.default.createDirectory(at: environmentURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? environment.write(to: environmentURL, atomically: true, encoding: .utf8)
         startEngine(saved: saved)
+        // The engine fetches on its own only when a push arrives, and a push
+        // sent while the app wasn't running can be missed, so catch up now.
+        await syncNow()
     }
 
     private func startEngine(saved: CKSyncEngine.State.Serialization?) {
