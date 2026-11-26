@@ -141,10 +141,6 @@ impl CredentialIdHash {
 /// stored on the relay, so the root secret can be sealed to the passkey
 /// without asking it again.
 pub struct PasskeyKeyPair {
-    #[expect(
-        dead_code,
-        reason = "read when opening a wrapped secret, in the next change"
-    )]
     pub(crate) private: <X25519HkdfSha256 as hpke::Kem>::PrivateKey,
     pub(crate) public: [u8; 32],
 }

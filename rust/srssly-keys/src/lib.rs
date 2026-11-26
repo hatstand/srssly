@@ -8,6 +8,7 @@ mod b64;
 mod error;
 mod keys;
 mod passkey;
+mod wrap;
 
 pub use account::AccountId;
 pub use error::{Error, Result};
@@ -16,6 +17,7 @@ pub use passkey::{
     CredentialIdHash, PRF_INPUT, PasskeyKeyPair, PrfAuthenticator, PrfOutput, SoftPasskey,
     ctap_hmac_secret_salt,
 };
+pub use wrap::WrappedSecret;
 
 pub(crate) fn random_bytes<const N: usize>() -> [u8; N] {
     let mut out = [0u8; N];
