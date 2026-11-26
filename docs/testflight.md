@@ -74,5 +74,5 @@ External TestFlight groups go through Beta App Review, which needs:
   zone, and the device log for CKError messages.
 - Development and production are separate iCloud databases. A TestFlight
   build installed over a development build keeps the local data, notices on
-  first launch that the production zone doesn't exist, and uploads
-  everything again. A fresh install starts empty and fills from iCloud.
+  first launch that the environment changed (`CloudEnvironment`, read from
+  the embedded provisioning profile), and uploads everything again. A fresh install starts empty and fills from iCloud.
