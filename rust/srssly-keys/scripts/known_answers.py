@@ -25,7 +25,7 @@ def hkdf(salt, ikm, info, n):
 
 
 raw = lambda k: k.public_bytes(s.Encoding.Raw, s.PublicFormat.Raw)
-root = bytes([1] * 32)
+root = bytes(range(32))
 acct = bytes([7] * 16)
 salt = b"srssly/v1/root/" + acct
 results = {
@@ -40,9 +40,9 @@ results["prf"] = H(bytes([9] * 32), results["ctap_salt"])
 
 # The same values are pinned in the Rust tests.
 EXPECTED = {
-    "key_check": "569b212342900e7981bf6ebcc19865bc",
-    "data_key": "c3f98b38d6afda017c359a1192342d596b85d1d2f60c657fa37475df84d2c2ce",
-    "auth_public": "b0745fcd50b58602711805695ec13ef10693ce25c623962a3ab9628d9f1529fc",
+    "key_check": "7d745637d079f47074bfa7e55b88b32e",
+    "data_key": "cd83ad81a9fdd0261d66adc35de901016197cef3917079477a6153a7e1fd1678",
+    "auth_public": "b73c2d802b74e5438e51c49cbab6873ba403e6a67ceea29abe902a4a72bd3172",
     "prf": "0763ce60a3fe189c114c48cf3a5ef43bbe48429e10c6384a67de5ead8a96e1f9",
     "ctap_salt": "09cfa2c104ea19b7a59f9472b2b6fd18194db1b560fa3bff1add23bfdd921a42",
 }
