@@ -15,6 +15,9 @@ pub enum Error {
     /// The passkey is already registered on the account.
     #[error("this passkey is already registered")]
     DuplicatePasskey,
+    /// Removing the passkey would leave the account with none.
+    #[error("cannot remove the last passkey")]
+    LastPasskey,
     /// The root secret doesn't match the account's key check.
     #[error("this root secret does not belong to the account at its current epoch")]
     WrongRootSecret,
@@ -40,6 +43,7 @@ impl Error {
             Error::DecryptionFailed => "decryption_failed",
             Error::UnknownPasskey => "unknown_passkey",
             Error::DuplicatePasskey => "duplicate_passkey",
+            Error::LastPasskey => "last_passkey",
             Error::WrongRootSecret => "wrong_root_secret",
             Error::InvalidRecoveryKey(_) => "invalid_recovery_key",
             Error::UnsupportedVersion(_) => "unsupported_version",
