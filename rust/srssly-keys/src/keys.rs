@@ -31,6 +31,14 @@ impl RootSecret {
         &self.0
     }
 
+    /// The raw secret, for keeping it in the platform keychain (or the CLI's
+    /// test device file). Only built with the `export-root-secret` feature, so
+    /// code has to opt in before it can read the bytes.
+    #[cfg(feature = "export-root-secret")]
+    pub fn export(&self) -> zeroize::Zeroizing<[u8; 32]> {
+        zeroize::Zeroizing::new(self.0)
+    }
+
     /// `HKDF-SHA256(salt = "srssly/v1/root/" || account, ikm = root)`.
     pub(crate) fn expand<const N: usize>(&self, account: &AccountId, info: &[u8]) -> [u8; N] {
         let mut salt = b"srssly/v1/root/".to_vec();
