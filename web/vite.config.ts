@@ -30,6 +30,10 @@ function feedProxy(): Plugin {
 
 export default defineConfig({
   plugins: [react(), feedProxy()],
+  // Allow serving over Tailscale (`tailscale serve` gives https://<host>.<tailnet>.ts.net,
+  // which the app needs: crypto.subtle only exists in secure contexts).
+  server: { allowedHosts: [".ts.net"] },
+  preview: { allowedHosts: [".ts.net"] },
   test: {
     environment: "jsdom",
   },
