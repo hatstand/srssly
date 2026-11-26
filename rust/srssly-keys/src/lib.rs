@@ -7,7 +7,7 @@ mod account;
 mod keys;
 
 pub use account::AccountId;
-pub use keys::{KeyCheck, RootSecret};
+pub use keys::{DerivedKeys, KeyCheck, RootSecret};
 
 pub(crate) fn random_bytes<const N: usize>() -> [u8; N] {
     let mut out = [0u8; N];

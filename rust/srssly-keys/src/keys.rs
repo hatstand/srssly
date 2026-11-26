@@ -1,5 +1,6 @@
 use std::fmt;
 
+use ed25519_dalek::SigningKey;
 use hkdf::Hkdf;
 use sha2::Sha256;
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -41,11 +42,41 @@ impl RootSecret {
     pub fn key_check(&self, account: &AccountId) -> KeyCheck {
         KeyCheck(self.expand(account, b"key-check"))
     }
+
+    /// The keys derived from this secret for `account`.
+    pub fn derive(&self, account: &AccountId) -> DerivedKeys {
+        let auth_seed: [u8; 32] = self.expand(account, b"auth-key");
+        DerivedKeys {
+            data_key: self.expand(account, b"data-key"),
+            auth_key: SigningKey::from_bytes(&auth_seed),
+        }
+    }
 }
 
 impl fmt::Debug for RootSecret {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("RootSecret(..)")
+    }
+}
+
+/// Keys derived from the root secret.
+pub struct DerivedKeys {
+    /// AES-256-GCM key for sync records.
+    pub data_key: [u8; 32],
+    /// Ed25519 key that authenticates this account to the relay.
+    pub auth_key: SigningKey,
+}
+
+impl DerivedKeys {
+    /// The relay identifies the account's current key by this public key.
+    pub fn auth_public_key(&self) -> [u8; 32] {
+        self.auth_key.verifying_key().to_bytes()
+    }
+}
+
+impl Drop for DerivedKeys {
+    fn drop(&mut self) {
+        self.data_key.zeroize();
     }
 }
 
@@ -83,6 +114,19 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn derived_keys_are_deterministic_and_independent() {
+        let root = RootSecret::from_bytes([1; 32]);
+        let a = root.derive(&account());
+        let b = root.derive(&account());
+        assert_eq!(a.data_key, b.data_key);
+        assert_eq!(a.auth_public_key(), b.auth_public_key());
+        assert_ne!(a.data_key, a.auth_key.to_bytes());
+        assert_ne!(&a.data_key[..16], root.key_check(&account()).as_bytes());
+        let other = AccountId::from_bytes([8; 16]);
+        assert_ne!(a.data_key, root.derive(&other).data_key);
+    }
+
+    #[test]
     fn generated_secrets_differ() {
         assert_ne!(RootSecret::generate(), RootSecret::generate());
         assert_ne!(AccountId::generate(), AccountId::generate());
@@ -104,6 +148,17 @@ pub(crate) mod tests {
             "key_check",
             root.key_check(&account()).as_bytes(),
             "569b212342900e7981bf6ebcc19865bc",
+        );
+        let keys = root.derive(&account());
+        assert_hex(
+            "data_key",
+            &keys.data_key,
+            "c3f98b38d6afda017c359a1192342d596b85d1d2f60c657fa37475df84d2c2ce",
+        );
+        assert_hex(
+            "auth_public",
+            &keys.auth_public_key(),
+            "b0745fcd50b58602711805695ec13ef10693ce25c623962a3ab9628d9f1529fc",
         );
     }
 

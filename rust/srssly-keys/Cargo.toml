@@ -6,6 +6,7 @@ description = "Key management for Srssly end-to-end encrypted sync: passkey PRF 
 publish = false
 
 [dependencies]
+ed25519-dalek = "3.0.0"
 getrandom = "0.4.3"
 hkdf = "0.13.0"
 sha2 = "0.11.2"
