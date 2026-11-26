@@ -9,7 +9,9 @@ mod error;
 mod keys;
 mod passkey;
 mod recovery;
-mod wrap;
+
+// Keep `crate::wrap` as a short path inside the crate.
+use keys::wrap;
 
 pub use account::AccountId;
 pub use error::{Error, Result};
