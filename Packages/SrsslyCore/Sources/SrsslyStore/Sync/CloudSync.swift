@@ -14,9 +14,12 @@ public actor CloudSync: CKSyncEngineDelegate {
     private let container: ModelContainer
     private let database: CKDatabase
     private let stateURL: URL
+    /// Holds the app build that last confirmed the zone exists on the server.
+    private let zoneCheckURL: URL
     private let log = Logger(subsystem: "com.purplehatstands.srssly", category: "sync")
 
     private var engine: CKSyncEngine?
+    private var starting = false
     /// Contexts this actor writes with carry this author, so their saves
     /// aren't echoed back as uploads.
     static let author = "CloudSync"
@@ -26,6 +29,7 @@ public actor CloudSync: CKSyncEngineDelegate {
         self.container = container
         self.database = CKContainer(identifier: cloudContainerID).privateCloudDatabase
         self.stateURL = stateDirectory.appending(path: "CloudSyncState.json")
+        self.zoneCheckURL = stateDirectory.appending(path: "CloudSyncZoneChecked")
     }
 
     deinit {
@@ -33,20 +37,59 @@ public actor CloudSync: CKSyncEngineDelegate {
     }
 
     /// Starts syncing. Call once at launch, after the first frame.
-    public func start() {
-        guard engine == nil else { return }
-        let saved = loadState()
+    public func start() async {
+        guard engine == nil, !starting else { return }
+        starting = true
+        defer { starting = false }
+        var saved = loadState()
+        if saved != nil, await zoneMissingOnServer() {
+            // We have sync state, but the server has no zone: this is a new
+            // CloudKit environment (a TestFlight build installed over a
+            // development one, which keeps the local store) or the zone went
+            // away. The saved state says everything is uploaded, so start
+            // over and upload it all.
+            log.notice("Sync zone missing on the server; uploading all local data again")
+            clearSystemFields()
+            try? FileManager.default.removeItem(at: stateURL)
+            saved = nil
+        }
+        startEngine(saved: saved)
+    }
+
+    private func startEngine(saved: CKSyncEngine.State.Serialization?) {
         let engine = CKSyncEngine(CKSyncEngine.Configuration(
             database: database, stateSerialization: saved, delegate: self
         ))
         self.engine = engine
         observeLocalSaves()
         if saved == nil {
-            // First run (or after an account change): create the zone and
-            // upload everything already on this device.
+            // First run (or after an account or environment change): create
+            // the zone and upload everything already on this device.
             engine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: CloudSchema.zoneID))])
             enqueueAllLocalRecords()
         }
+    }
+
+    /// Whether the server lacks our zone. Checked once per app build, since
+    /// the CloudKit environment can only change when a different build is
+    /// installed. Network and account errors count as "no": the check runs
+    /// again next launch.
+    private func zoneMissingOnServer() async -> Bool {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let build = "\(info["CFBundleShortVersionString"] ?? "")(\(info["CFBundleVersion"] ?? ""))"
+        if (try? String(contentsOf: zoneCheckURL, encoding: .utf8)) == build { return false }
+        let missing: Bool
+        do {
+            _ = try await database.recordZone(for: CloudSchema.zoneID)
+            missing = false
+        } catch let error as CKError where error.code == .zoneNotFound || error.code == .userDeletedZone {
+            missing = true
+        } catch {
+            log.error("Checking the sync zone failed: \(error, privacy: .public)")
+            return false
+        }
+        try? build.write(to: zoneCheckURL, atomically: true, encoding: .utf8)
+        return missing
     }
 
     /// Fetches and sends now, e.g. on pull to refresh.
@@ -325,7 +368,7 @@ public actor CloudSync: CKSyncEngineDelegate {
     private func resetEngine() {
         try? FileManager.default.removeItem(at: stateURL)
         engine = nil
-        start()
+        startEngine(saved: nil)
     }
 
     // MARK: - State persistence

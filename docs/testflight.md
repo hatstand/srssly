@@ -72,5 +72,7 @@ External TestFlight groups go through Beta App Review, which needs:
   after reinstalling) the subscription should appear. If not, check the
   CloudKit Console's **Production** environment for records in the `Srssly`
   zone, and the device log for CKError messages.
-- Development data does not carry over: production starts empty, so
-  re-import the OPML on the TestFlight build.
+- Development and production are separate iCloud databases. A TestFlight
+  build installed over a development build keeps the local data, notices on
+  first launch that the production zone doesn't exist, and uploads
+  everything again. A fresh install starts empty and fills from iCloud.
