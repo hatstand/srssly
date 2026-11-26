@@ -9,6 +9,9 @@ pub enum Error {
     /// Decryption failed: the data was tampered with or belongs to another account or epoch.
     #[error("decryption failed")]
     DecryptionFailed,
+    /// The passkey is already registered on the account.
+    #[error("this passkey is already registered")]
+    DuplicatePasskey,
     /// The root secret doesn't match the account's key check.
     #[error("this root secret does not belong to the account at its current epoch")]
     WrongRootSecret,
@@ -32,6 +35,7 @@ impl Error {
         match self {
             Error::WrongPasskey => "wrong_passkey",
             Error::DecryptionFailed => "decryption_failed",
+            Error::DuplicatePasskey => "duplicate_passkey",
             Error::WrongRootSecret => "wrong_root_secret",
             Error::InvalidRecoveryKey(_) => "invalid_recovery_key",
             Error::UnsupportedVersion(_) => "unsupported_version",
