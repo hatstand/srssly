@@ -48,7 +48,10 @@ these work:
 
 Authenticators implement `PrfAuthenticator`. Today there is `SoftPasskey`, a
 software stand-in that behaves like a CTAP2 authenticator with
-`hmac-secret`: `HMAC-SHA-256(credRandom, SHA-256("WebAuthn PRF" ‖ 0x00 ‖ input))`.
+`hmac-secret`: `HMAC-SHA-256(credRandom, SHA-256("WebAuthn PRF" ‖ 0x00 ‖ input))`. It is
+only compiled in tests or with the `soft-passkey` feature (which the `cli`
+feature turns on), so app builds, which use `default-features = false`,
+never contain it.
 Anything that can report a credential ID and PRF output (a browser, a
 platform passkey API) can also be used directly, through the `*_with_prf`
 functions or the CLI's `--credential-id`/`--prf` flags.
