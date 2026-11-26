@@ -23,7 +23,9 @@ zeroize = { version = "1.9.2", features = ["derive"] }
 [features]
 default = ["cli"]
 # The command-line tool for manual and automated key-management testing.
-cli = ["dep:clap"]
+cli = ["dep:clap", "soft-passkey"]
+# SoftPasskey, a software passkey for tests and the CLI. Never enable it in an app.
+soft-passkey = []
 
 [[bin]]
 name = "srssly-keys"
