@@ -85,12 +85,11 @@ impl WrappedSecret {
             &aad(account, epoch, credential),
         )
         .map_err(|_| Error::DecryptionFailed)?;
-        let bytes: [u8; 32] = plain
-            .as_slice()
-            .try_into()
-            .map_err(|_| Error::DecryptionFailed)?;
+        let bytes: Option<[u8; 32]> = plain.as_slice().try_into().ok();
         zeroize::Zeroize::zeroize(&mut plain);
-        Ok(RootSecret::from_bytes(bytes))
+        bytes
+            .and_then(RootSecret::from_bytes)
+            .ok_or(Error::Malformed("root secret"))
     }
 }
 
