@@ -164,7 +164,7 @@ impl Device {
         let bytes: [u8; 32] = decode(&self.root_secret, "root secret")?
             .try_into()
             .map_err(|_| CliError::usage("root secret must be 32 bytes"))?;
-        Ok(RootSecret::from_bytes(bytes))
+        RootSecret::from_bytes(bytes).ok_or_else(|| CliError::usage("root secret is not random"))
     }
 }
 
