@@ -47,7 +47,7 @@ impl RootSecret {
     pub fn derive(&self, account: &AccountId) -> DerivedKeys {
         let auth_seed: [u8; 32] = self.expand(account, b"auth-key");
         DerivedKeys {
-            data_key: self.expand(account, b"data-key"),
+            data_key: DataKey(self.expand(account, b"data-key")),
             auth_key: SigningKey::from_bytes(&auth_seed),
         }
     }
@@ -76,8 +76,7 @@ impl fmt::Debug for RootSecret {
 
 /// Keys derived from the root secret.
 pub struct DerivedKeys {
-    /// AES-256-GCM key for sync records.
-    pub data_key: [u8; 32],
+    pub data_key: DataKey,
     /// Ed25519 key that authenticates this account to the relay.
     pub auth_key: SigningKey,
 }
@@ -89,9 +88,14 @@ impl DerivedKeys {
     }
 }
 
-impl Drop for DerivedKeys {
-    fn drop(&mut self) {
-        self.data_key.zeroize();
+/// The AES-256-GCM key for sync records. Like [`RootSecret`], its bytes can't
+/// be read outside this module, and it is wiped when dropped.
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+pub struct DataKey([u8; 32]);
+
+impl fmt::Debug for DataKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("DataKey(..)")
     }
 }
 
@@ -138,12 +142,12 @@ pub(crate) mod tests {
         let root = test_root(1);
         let a = root.derive(&account());
         let b = root.derive(&account());
-        assert_eq!(a.data_key, b.data_key);
+        assert_eq!(a.data_key.0, b.data_key.0);
         assert_eq!(a.auth_public_key(), b.auth_public_key());
-        assert_ne!(a.data_key, a.auth_key.to_bytes());
-        assert_ne!(&a.data_key[..16], root.key_check(&account()).as_bytes());
+        assert_ne!(a.data_key.0, a.auth_key.to_bytes());
+        assert_ne!(&a.data_key.0[..16], root.key_check(&account()).as_bytes());
         let other = AccountId::from_bytes([8; 16]);
-        assert_ne!(a.data_key, root.derive(&other).data_key);
+        assert_ne!(a.data_key.0, root.derive(&other).data_key.0);
     }
 
     #[test]
@@ -167,6 +171,8 @@ pub(crate) mod tests {
     fn debug_hides_secret() {
         let root = test_root(0xAB);
         assert_eq!(format!("{root:?}"), "RootSecret(..)");
+        let keys = root.derive(&account());
+        assert_eq!(format!("{:?}", keys.data_key), "DataKey(..)");
     }
 
     /// Pins the derivation so other implementations (Swift, Kotlin, web) can
@@ -183,7 +189,7 @@ pub(crate) mod tests {
         let keys = root.derive(&account());
         assert_hex(
             "data_key",
-            &keys.data_key,
+            &keys.data_key.0,
             "cd83ad81a9fdd0261d66adc35de901016197cef3917079477a6153a7e1fd1678",
         );
         assert_hex(
