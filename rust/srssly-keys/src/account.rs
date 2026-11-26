@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::keys::{KeyCheck, RootSecret};
 use crate::passkey::{CredentialIdHash, PRF_INPUT, PasskeyKeyPair, PrfAuthenticator, PrfOutput};
+use crate::recovery::RecoveryKey;
 use crate::wrap::WrappedSecret;
 use crate::{Error, FORMAT_VERSION, Result, b64, random_bytes};
 
@@ -148,6 +149,32 @@ impl AccountKeys {
             .iter()
             .find(|p| &p.credential_id_hash == credential_id_hash)
     }
+    /// Unlocks the root secret with a registered passkey.
+    pub fn unlock(&self, authenticator: &dyn PrfAuthenticator) -> Result<RootSecret> {
+        let prf = authenticator.evaluate_prf(PRF_INPUT)?;
+        self.unlock_with_prf(authenticator.credential_id(), &prf)
+    }
+
+    pub fn unlock_with_prf(&self, credential_id: &[u8], prf: &PrfOutput) -> Result<RootSecret> {
+        let hash = CredentialIdHash::of(credential_id);
+        let info = self.find(&hash).ok_or(Error::UnknownPasskey)?;
+        let root = info.wrapped.open(
+            &PasskeyKeyPair::from_prf(prf),
+            &self.account_id,
+            self.epoch,
+            &hash,
+        )?;
+        self.verify_root(&root)?;
+        Ok(root)
+    }
+
+    /// Unlocks the root secret from a recovery key, checking it is current.
+    pub fn unlock_with_recovery_key(&self, key: &RecoveryKey) -> Result<RootSecret> {
+        let root = key.root_secret();
+        self.verify_root(&root)?;
+        Ok(root)
+    }
+
     pub fn to_json(&self) -> String {
         serde_json::to_string_pretty(self).expect("AccountKeys always serializes")
     }
@@ -293,6 +320,70 @@ mod tests {
                 .to_json()
                 .contains(&b64::encode(root.as_bytes()))
         );
+    }
+
+    #[test]
+    fn create_then_unlock() {
+        let pk = SoftPasskey::generate();
+        let (keys, root) = AccountKeys::create(&pk, "laptop").unwrap();
+        assert_eq!(keys.epoch, 0);
+        assert_eq!(keys.passkeys.len(), 1);
+        assert_eq!(keys.passkeys[0].label, "laptop");
+        assert_eq!(keys.unlock(&pk).unwrap(), root);
+        assert_eq!(
+            keys.auth_public_key,
+            root.derive(&keys.account_id).auth_public_key()
+        );
+    }
+
+    #[test]
+    fn multiple_passkeys_unlock_the_same_secret() {
+        let a = SoftPasskey::generate();
+        let b = SoftPasskey::generate();
+        let c = SoftPasskey::generate();
+        let (mut keys, root) = AccountKeys::create(&a, "a").unwrap();
+        keys.add_passkey(&root, &b, "b").unwrap();
+        keys.add_passkey(&root, &c, "c").unwrap();
+        for pk in [&a, &b, &c] {
+            assert_eq!(keys.unlock(pk).unwrap(), root);
+        }
+    }
+
+    #[test]
+    fn unregistered_passkey_is_unknown() {
+        let (keys, _) = AccountKeys::create(&SoftPasskey::generate(), "a").unwrap();
+        assert_eq!(
+            keys.unlock(&SoftPasskey::generate()),
+            Err(Error::UnknownPasskey)
+        );
+    }
+
+    #[test]
+    fn wrong_prf_for_known_credential_is_rejected() {
+        let pk = SoftPasskey::generate();
+        let (keys, _) = AccountKeys::create(&pk, "a").unwrap();
+        let impostor = SoftPasskey::from_parts(pk.credential_id().to_vec(), [0; 32]);
+        assert_eq!(keys.unlock(&impostor), Err(Error::WrongPasskey));
+    }
+
+    #[test]
+    fn recovery_key_unlocks() {
+        let (keys, root) = AccountKeys::create(&SoftPasskey::generate(), "a").unwrap();
+        let recovery = RecoveryKey::from_root(&root);
+        assert_eq!(keys.unlock_with_recovery_key(&recovery).unwrap(), root);
+        let other = RecoveryKey::from_root(&RootSecret::generate());
+        assert_eq!(
+            keys.unlock_with_recovery_key(&other),
+            Err(Error::WrongRootSecret)
+        );
+    }
+
+    #[test]
+    fn unlocks_after_json_round_trip() {
+        let pk = SoftPasskey::generate();
+        let (keys, root) = AccountKeys::create(&pk, "a").unwrap();
+        let back = AccountKeys::from_json(&keys.to_json()).unwrap();
+        assert_eq!(back.unlock(&pk).unwrap(), root);
     }
 
     #[test]
