@@ -58,3 +58,43 @@ content, caps responses at 10 MB, and only answers the origins in
 4. In the Cloudflare dashboard, check Workers → srssly-proxy → Settings:
    Observability / Workers Logs off, no Logpush jobs, no KV/D1 bindings.
 5. Build the client with `VITE_PROXY_URL=https://srssly-proxy.<you>.workers.dev npm run build`.
+
+## iCloud sync
+
+`src/sync/` syncs subscriptions and read/starred state with the iOS app
+through the user's private CloudKit database, using the schema in
+[docs/cloudkit-schema.md](../docs/cloudkit-schema.md) unchanged. It works
+like `CloudSync` on iOS: each record keeps the server's fields as last seen
+(the base), local edits are records whose fields differ from the base, and
+fetched changes merge field by field (`modifiedAt` breaks same-field ties,
+the server wins exact ties). It fetches changes with the zone's sync token,
+so no queryable indexes are needed.
+
+CloudKit JS (Apple's script) only loads when a token is configured and
+after the app has rendered, so it never delays the first paint. Without a
+token the app works the same, just without sync.
+
+### Setting up sync (manual, John)
+
+1. [CloudKit Console](https://icloud.developer.apple.com/) → the
+   `iCloud.com.purplehatstands.srssly` container → **API Access** → **API
+   Tokens** → add a token:
+   - Sign in callback: **postMessage**
+   - Allowed origins: `http://localhost:5173` (plus the deployed origin later)
+   - Discoverability / sign-in: the defaults are fine
+2. Put it in `web/.env.local` (git-ignored):
+
+   ```sh
+   VITE_CLOUDKIT_API_TOKEN=<token>
+   VITE_CLOUDKIT_ENVIRONMENT=development   # debug builds from Xcode
+   ```
+
+   Use `production` to share data with TestFlight and App Store builds (after
+   the schema is deployed to production, see docs/cloudkit-schema.md).
+   Tokens are per environment, so create one for each.
+3. `npm run dev`, then click **Sign in with Apple ID** in the sidebar.
+
+**Advanced Data Protection:** with ADP on, Apple may refuse web access to
+the private database (`ACCESS_DENIED`, "private db access disabled for this
+account"), possibly even with *Access iCloud Data on the Web* turned on.
+The app shows that error in the sidebar and carries on without sync.

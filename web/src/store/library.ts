@@ -164,7 +164,7 @@ export class Library {
     await this.putSubscription({ ...edit(old), id, modifiedAt: this.now() });
   }
 
-  async removeSubscription(id: UUID): Promise<void> {
+  async removeSubscription(id: UUID, local = true): Promise<void> {
     const keys = [...this.articles.values()].filter((a) => a.subscriptionID === id).map((a) => a.key);
     const stateKeys = [...this.states.keys()].filter((k) => k.startsWith(`${id}:`));
     const tx = (await this.db).transaction(["subscriptions", "articles", "states", "fetchState"], "readwrite");
@@ -179,7 +179,8 @@ export class Library {
     this.fetchStates.delete(id);
     for (const k of keys) this.articles.delete(k);
     for (const k of stateKeys) this.states.delete(k);
-    this.changed({ kind: "subscriptionDeleted", id });
+    if (local) this.changed({ kind: "subscriptionDeleted", id });
+    else this.changed();
   }
 
   protected async putSubscription(sub: Subscription, local = true): Promise<void> {
@@ -187,6 +188,31 @@ export class Library {
     this.subscriptions.set(sub.id, sub);
     if (local) this.changed({ kind: "subscription", id: sub.id });
     else this.changed();
+  }
+
+  // MARK: Changes from sync (not echoed back as local changes)
+
+  async applyRemoteSubscription(sub: Subscription): Promise<void> {
+    await this.putSubscription(sub, false);
+  }
+
+  async applyRemoteStates(states: ArticleState[]): Promise<void> {
+    if (states.length === 0) return;
+    const tx = (await this.db).transaction("states", "readwrite");
+    await Promise.all([...states.map((s) => tx.store.put(s)), tx.done]);
+    for (const s of states) this.states.set(s.articleKey, s);
+    this.changed();
+  }
+
+  async removeRemoteState(key: string): Promise<void> {
+    await (await this.db).delete("states", key);
+    this.states.delete(key);
+    this.changed();
+  }
+
+  /** Writes sync's bookkeeping in the same database. */
+  database(): Promise<DB> {
+    return this.db;
   }
 
   // MARK: Read and starred

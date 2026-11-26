@@ -6,11 +6,15 @@ import { ArticleList } from "./ui/ArticleList";
 import { LibraryContext, useLibrary } from "./ui/LibraryContext";
 import { Reader } from "./ui/Reader";
 import { Sidebar } from "./ui/Sidebar";
+import { SyncPanel } from "./ui/SyncPanel";
+import { cloudKitConfig } from "./sync/cloudkit";
+import { SyncController } from "./sync/controller";
 import type { Source } from "./ui/selection";
 
 // Created at module load so IndexedDB opens while React renders the shell.
 const library = new Library(openSrsslyDB());
 void library.load().then(() => library.refreshAll());
+const sync = new SyncController(library, cloudKitConfig());
 
 export function App() {
   return (
@@ -77,7 +81,7 @@ function Shell() {
 
   return (
     <div className={`app pane-${pane}`}>
-      <Sidebar source={source} onSelect={choose} />
+      <Sidebar source={source} onSelect={choose} syncSlot={<SyncPanel controller={sync} />} />
       <ArticleList
         title={title}
         articles={articles}

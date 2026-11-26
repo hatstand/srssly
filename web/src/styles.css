@@ -117,3 +117,5 @@ a { color: var(--accent); }
 @media (min-width: 761px) and (max-width: 1100px) {
   .app { grid-template-columns: 13rem 18rem 1fr; }
 }
+.sync { margin-top: 1.5rem; border-top: 1px solid var(--line); padding-top: 0.5rem; }
+.sync > .link, .sync > div { padding: 0 0.9rem; }
