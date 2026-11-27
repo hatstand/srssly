@@ -18,6 +18,8 @@ make test        # run app tests on a simulator
 
 The Xcode project is generated from `project.yml` and not committed.
 
+`rust/` holds the Rust sync core, starting with key management for end-to-end encrypted sync ([rust/srssly-keys](rust/srssly-keys/README.md)). Run `cargo test` there.
+
 ### iCloud setup (once)
 
 CI runs the app with `-SrsslySampleData`, which never starts sync. Local builds are signed with the team in `project.yml`, which includes the iCloud entitlement that sync needs. To sync for real:

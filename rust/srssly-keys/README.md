@@ -1,0 +1,90 @@
+# srssly-keys
+
+Key management for Srssly's end-to-end encrypted sync: passkey PRF wrapping,
+recovery keys and key rotation. It is the first piece of the shared Rust sync
+core; Swift, Kotlin and WebAssembly bindings come later.
+
+```sh
+cd rust
+cargo test                                   # unit tests and CLI end-to-end tests
+python3 srssly-keys/scripts/known_answers.py # independent check of the pinned test vectors (needs `cryptography`)
+cargo run -q -- --help                       # the CLI
+```
+
+## How it works
+
+Each account has one random 32-byte **root secret**. It never leaves a device
+unencrypted. `RootSecret` has no public way to read its bytes; code that must
+store them (the platform keychain, the CLI's test device file) enables the
+`export-root-secret` feature and calls `RootSecret::export`.
+Every way of making a `RootSecret` (generating, unsealing, a recovery phrase,
+raw bytes) rejects bytes with fewer than 8 distinct values. That can't prove a
+secret is random, but it catches zeros, repeated bytes, short patterns and a
+broken RNG, and a truly random secret fails it with probability about 10⁻³⁷. The relay stores an `AccountKeys` record that is safe for it to
+see: public keys, a key check and sealed secrets.
+
+| Piece | How it's made |
+| --- | --- |
+| Passkey PRF | WebAuthn `prf` extension, input `srssly/v1/passkey-prf` (the same for every credential, so sign-in needs no username). |
+| Passkey key pair | X25519 via RFC 9180 `DeriveKeyPair` from `HKDF-SHA256(salt="srssly/v1/passkey-kem", ikm=PRF output, info="x25519")`. The public key is stored on the relay. |
+| Wrapped secret | The root secret sealed with HPKE base mode (DHKEM X25519, HKDF-SHA256, AES-256-GCM), `info="srssly/v1/root-wrap"`, associated data = `"srssly/v1/root-wrap/" ‖ account ID ‖ epoch (u32 BE) ‖ SHA-256(credential ID)`. One per passkey. |
+| Derived keys | `HKDF-SHA256(salt="srssly/v1/root/" ‖ account ID, ikm=root)`: `key-check` (16 bytes, public), `data-key` (AES-256-GCM for records), `auth-key` (Ed25519 seed for relay authentication). |
+| Recovery key | The root secret as 24 BIP39 English words. Optional. |
+
+Because each passkey is represented by a public key, the root secret can be
+sealed to every passkey without asking each one again. That is what makes
+these work:
+
+- **Multiple passkeys.** Add one from any unlocked device; each gets its own
+  wrapped copy, found by its credential ID hash.
+- **Removal.** Deletes that passkey's wrapped copy. It can't undo a device
+  that already unlocked the secret; rotation does that.
+- **Rotation.** A new root secret and epoch, re-sealed to every registered
+  passkey. Old devices, wrapped copies and recovery keys stop working. (Synced
+  records then need re-encrypting under the new data key; that's for the sync
+  layer.)
+
+## Authenticators
+
+Authenticators implement `PrfAuthenticator`. Today there is `SoftPasskey`, a
+software stand-in that behaves like a CTAP2 authenticator with
+`hmac-secret`: `HMAC-SHA-256(credRandom, SHA-256("WebAuthn PRF" ‖ 0x00 ‖ input))`. It is
+only compiled in tests or with the `soft-passkey` feature (which the `cli`
+feature turns on), so app builds, which use `default-features = false`,
+never contain it.
+Anything that can report a credential ID and PRF output (a browser, a
+platform passkey API) can also be used directly, through the `*_with_prf`
+functions or the CLI's `--credential-id`/`--prf` flags.
+
+Planned: YubiKeys over CTAP2 `hmac-secret`, and Touch ID / platform passkeys,
+for manual testing.
+
+## CLI
+
+`srssly-keys` drives the whole lifecycle from files, for manual testing and
+scripts. Each command prints one JSON object; errors print
+`{"error": "<code>", "message": ...}` to stderr and exit 1.
+
+```sh
+srssly-keys passkey new --out a.json                 # software passkey (TEST ONLY: holds its secret)
+srssly-keys create --account acct.json --device dev.json --passkey a.json --label laptop
+srssly-keys passkey new --out b.json
+srssly-keys add-passkey --account acct.json --device dev.json --passkey b.json --label phone
+srssly-keys list --account acct.json
+srssly-keys unlock --account acct.json --passkey b.json --device-out dev2.json
+srssly-keys recovery-key --device dev.json
+srssly-keys recover --account acct.json --words "…24 words…" --device-out dev3.json
+srssly-keys rotate --account acct.json --device dev.json
+srssly-keys remove-passkey --account acct.json --passkey b.json
+srssly-keys verify --account acct.json --device dev.json
+# A real authenticator: pass what the browser's PRF extension returned.
+srssly-keys unlock --account acct.json --credential-id <base64url> --prf <base64url>
+```
+
+`acct.json` is what the relay would store. `dev.json` stands in for a device's
+Keychain and holds the root secret in plain text, so it is for testing only.
+
+Error codes: `wrong_passkey`, `unknown_passkey`, `duplicate_passkey`,
+`last_passkey`, `decryption_failed`, `wrong_root_secret`,
+`invalid_recovery_key`, `unsupported_version`, `authenticator`, `malformed`,
+`io`, `usage`.
