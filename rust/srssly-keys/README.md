@@ -141,5 +141,5 @@ Keychain and holds the root secret in plain text, so it is for testing only.
 
 Error codes: `wrong_passkey`, `unknown_passkey`, `duplicate_passkey`,
 `last_passkey`, `decryption_failed`, `wrong_root_secret`,
-`invalid_recovery_key`, `unsupported_version`, `authenticator`, `tampered`, `stale`, `malformed`,
+`invalid_recovery_key`, `unsupported_version`, `authenticator`, `tampered`, `stale`, `limit_reached`, `malformed`,
 `io`, `usage`.
