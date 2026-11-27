@@ -214,7 +214,7 @@ impl AccountKeys {
 
     fn sign(&mut self, root: &RootSecret) {
         let auth_key = root.derive(&self.account_id).auth_key;
-        self.signature = auth_key.sign(self.signed_bytes().bytes());
+        self.signature = auth_key.sign(&self.signed_bytes());
     }
 
     /// Checks that `root` is current and that the record is signed by the
@@ -226,9 +226,7 @@ impl AccountKeys {
     }
 
     fn verify_signature_by(&self, public: &AuthPublicKey) -> Result<()> {
-        if *public == self.auth_public_key
-            && public.verify(self.signed_bytes().bytes(), &self.signature)
-        {
+        if *public == self.auth_public_key && public.verify(&self.signed_bytes(), &self.signature) {
             Ok(())
         } else {
             Err(Error::Tampered)
@@ -499,9 +497,7 @@ impl AccountKeys {
         // The old auth key vouches for the new epoch, extending the chain.
         let mut link = next.epochs.pop().expect("a new record has one link");
         let old_key = current.derive(&self.account_id).auth_key;
-        link.signature = old_key
-            .sign(link.signed_bytes(&self.account_id).bytes())
-            .to_vec();
+        link.signature = old_key.sign(&link.signed_bytes(&self.account_id)).to_vec();
         next.epochs = self.epochs.clone();
         next.epochs.push(link);
         for p in kept {
@@ -592,7 +588,7 @@ impl AccountKeys {
                 .map_err(|_| Error::Malformed("epoch signature"))?;
             let signed = link.signed_bytes(&self.account_id);
             if Some(link.epoch) != previous.epoch.checked_add(1)
-                || !previous.auth_public_key.verify(signed.bytes(), signature)
+                || !previous.auth_public_key.verify(&signed, signature)
             {
                 return Err(Error::Tampered);
             }
@@ -1040,9 +1036,25 @@ mod tests {
         forged.sign(&relay_root);
         let parse = AccountKeys::from_json(&forged.to_json());
         assert_eq!(parse, Err(Error::Tampered));
+        // Positive control: with a raw signature of the same challenge (what
+        // a public raw sign() would have given) the forgery gets through.
+        let link = forged.epochs.last_mut().unwrap();
+        link.signature = auth_key.sign(&challenge).to_vec();
+        let p = &real.passkeys[0];
+        forged.passkeys[0].wrapped = WrappedSecret::seal(
+            &relay_root,
+            &p.wrapped.public_key,
+            &real.account_id,
+            1,
+            &p.credential_id_hash,
+        )
+        .unwrap();
+        forged.sign(&relay_root);
+        let forged = AccountKeys::from_json(&forged.to_json()).unwrap();
+        assert_eq!(forged.unlock(&a).unwrap(), relay_root);
         let record = real.signed_bytes();
         let signature = auth_key.sign_relay_request(record.bytes());
-        assert!(!real.auth_public_key.verify(record.bytes(), &signature));
+        assert!(!real.auth_public_key.verify(&record, &signature));
     }
 
     #[test]
@@ -1152,7 +1164,7 @@ mod tests {
             "b2b55fb8363fee8da86bf171176e45d7442564ecb3f8f1a6d3dd263836e2f41e",
         );
         let next = link(&test_root(1), 1).signed_bytes(&account());
-        let signature = test_root(0).derive(&account()).auth_key.sign(next.bytes());
+        let signature = test_root(0).derive(&account()).auth_key.sign(&next);
         assert_hex(
             "link_signature",
             &signature,
