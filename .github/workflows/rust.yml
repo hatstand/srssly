@@ -28,9 +28,18 @@ jobs:
       - run: cargo test --locked
       - name: Check the app library has no test-only code
         run: |
+          # The guard: the FFI crate must enable none of srssly-keys' features.
+          features=$(cargo tree --locked -p srssly-keys-ffi -e features -i srssly-keys)
+          if grep -E 'srssly-keys feature "(cli|soft-passkey|export-root-secret)"' <<<"$features"; then
+            echo "srssly-keys-ffi enables a test-only srssly-keys feature" >&2
+            exit 1
+          fi
           cargo build --locked --release -p srssly-keys-ffi --lib
-          if nm -C target/release/libsrssly_keys_ffi.a 2>/dev/null | grep -E 'SoftPasskey|RootSecret::export|PrfOutput::export|RecoveryKey::words'; then
-            echo "libsrssly_keys_ffi.a contains test-only or secret-export code" >&2
+          ../scripts/check-app-lib.sh target/release/libsrssly_keys_ffi.a
+          # The symbol check must catch the code it looks for.
+          cargo build --locked --release -p srssly-keys --lib --features cli
+          if ../scripts/check-app-lib.sh target/release/libsrssly_keys.rlib >/dev/null 2>&1; then
+            echo "check-app-lib.sh missed SoftPasskey in a cli build" >&2
             exit 1
           fi
       - name: Generate the Swift bindings
@@ -43,5 +52,5 @@ jobs:
           python-version: "3.13"
       - name: Check test vectors against the Python reference
         run: |
-          pip install cryptography
+          pip install cryptography==50.0.1
           python srssly-keys/scripts/known_answers.py
