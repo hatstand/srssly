@@ -1,6 +1,7 @@
 .PHONY: project open test test-core
 
 project:
+	./scripts/build-rust-ios.sh
 	xcodegen generate
 
 open: project

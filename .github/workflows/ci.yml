@@ -23,6 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: brew install xcodegen
+      - run: ./scripts/build-rust-ios.sh
       - run: xcodegen generate
       # XcodeGen rewrites the entitlements; without iCloud the app crashes at launch.
       - name: Check entitlements survived generation

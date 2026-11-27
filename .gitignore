@@ -15,3 +15,7 @@ Package.resolved
 # macOS
 .DS_Store
 TestFlight/
+
+# Rust key core, built by scripts/build-rust-ios.sh
+Packages/SrsslyKeys/SrsslyKeysFFI.xcframework/
+Packages/SrsslyKeys/Sources/SrsslyKeys/SrsslyKeys.swift
