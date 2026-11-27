@@ -355,7 +355,8 @@ mod tests {
     #[test]
     fn json_holds_no_secrets() {
         let bytes: [u8; 32] = std::array::from_fn(|i| 0x5a ^ i as u8);
-        let json = record(&RootSecret::from_bytes(bytes).unwrap()).to_json();
+        let root = RootSecret::from_bytes(&mut bytes.clone()).unwrap();
+        let json = record(&root).to_json();
         assert!(!json.contains(&b64::encode(&bytes)));
     }
 

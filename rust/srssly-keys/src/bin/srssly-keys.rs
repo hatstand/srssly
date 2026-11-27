@@ -159,10 +159,10 @@ impl PasskeyArgs {
             "credential ID",
         )?;
         let prf = decode(self.prf.as_deref().unwrap_or_default(), "PRF output")?;
-        let prf: [u8; 32] = prf
+        let mut prf: [u8; 32] = prf
             .try_into()
             .map_err(|_| CliError::usage("PRF output must be 32 bytes"))?;
-        let prf = PrfOutput::from_bytes(prf)
+        let prf = PrfOutput::from_bytes(&mut prf)
             .ok_or_else(|| CliError::usage("PRF output is not random"))?;
         Ok((id, prf))
     }
@@ -186,10 +186,11 @@ impl Device {
     }
 
     fn root(&self) -> Result<RootSecret, CliError> {
-        let bytes: [u8; 32] = decode(&self.root_secret, "root secret")?
+        let mut bytes: [u8; 32] = decode(&self.root_secret, "root secret")?
             .try_into()
             .map_err(|_| CliError::usage("root secret must be 32 bytes"))?;
-        RootSecret::from_bytes(bytes).ok_or_else(|| CliError::usage("root secret is not random"))
+        RootSecret::from_bytes(&mut bytes)
+            .ok_or_else(|| CliError::usage("root secret is not random"))
     }
 }
 

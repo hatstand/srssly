@@ -16,19 +16,25 @@ pub(crate) mod wrap;
 /// The account's root secret: 32 random bytes from which every other key derives.
 ///
 /// There is deliberately no public way to read the bytes back out, so they
-/// can't be logged or sent anywhere by accident.
-#[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
+/// can't be logged or sent anywhere by accident. Equality is for tests only:
+/// it isn't constant-time, and code should compare [`KeyCheck`]s instead.
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct RootSecret([u8; 32]);
 
 impl RootSecret {
     /// A new random root secret.
     pub fn generate() -> Self {
-        Self::from_bytes(random_bytes()).expect("system random number generator is broken")
+        Self::from_bytes(&mut random_bytes()).expect("system random number generator is broken")
     }
 
     /// `None` if the bytes are obviously not random (see [`looks_random`]).
-    pub fn from_bytes(bytes: [u8; 32]) -> Option<Self> {
-        looks_random(&bytes).then_some(Self(bytes))
+    /// Takes the bytes by reference and wipes them, so the caller's copy
+    /// doesn't linger on the stack.
+    pub fn from_bytes(bytes: &mut [u8; 32]) -> Option<Self> {
+        let secret = looks_random(bytes).then_some(Self(*bytes));
+        bytes.zeroize();
+        secret
     }
 
     /// Private: only this module and its children (which seal the secret) can
@@ -194,7 +200,7 @@ pub(crate) mod tests {
 
     /// A valid test secret: the bytes `first, first + 1, ..., first + 31`.
     pub(crate) fn test_root(first: u8) -> RootSecret {
-        RootSecret::from_bytes(std::array::from_fn(|i| first.wrapping_add(i as u8))).unwrap()
+        RootSecret::from_bytes(&mut std::array::from_fn(|i| first.wrapping_add(i as u8))).unwrap()
     }
 
     #[test]
@@ -232,14 +238,24 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn from_bytes_wipes_its_input() {
+        let mut bytes = std::array::from_fn(|i| i as u8);
+        assert!(RootSecret::from_bytes(&mut bytes).is_some());
+        assert_eq!(bytes, [0; 32]);
+        let mut weak = [1; 32];
+        assert!(RootSecret::from_bytes(&mut weak).is_none());
+        assert_eq!(weak, [0; 32]);
+    }
+
+    #[test]
     fn rejects_obviously_non_random_bytes() {
-        assert!(RootSecret::from_bytes([0; 32]).is_none());
-        assert!(RootSecret::from_bytes([0xff; 32]).is_none());
+        assert!(RootSecret::from_bytes(&mut [0; 32]).is_none());
+        assert!(RootSecret::from_bytes(&mut [0xff; 32]).is_none());
         let pattern = |n: u8| std::array::from_fn(|i| i as u8 % n);
-        assert!(RootSecret::from_bytes(pattern(7)).is_none());
-        assert!(RootSecret::from_bytes(pattern(8)).is_some());
+        assert!(RootSecret::from_bytes(&mut pattern(7)).is_none());
+        assert!(RootSecret::from_bytes(&mut pattern(8)).is_some());
         // Values in different 64-bit words of the bitmap all count.
-        assert!(RootSecret::from_bytes(std::array::from_fn(|i| (i as u8 % 8) * 32)).is_some());
+        assert!(RootSecret::from_bytes(&mut std::array::from_fn(|i| (i as u8 % 8) * 32)).is_some());
     }
 
     #[test]

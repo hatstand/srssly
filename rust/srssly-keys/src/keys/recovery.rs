@@ -43,7 +43,7 @@ impl RecoveryKey {
     }
 
     pub fn root_secret(&self) -> RootSecret {
-        RootSecret::from_bytes(*entropy(&self.0)).expect("checked when parsed")
+        RootSecret::from_bytes(&mut entropy(&self.0)).expect("checked when parsed")
     }
 
     /// The 24 words, to show the user once. Only built with
@@ -129,7 +129,7 @@ mod tests {
             0xca, 0x8c, 0xc6, 0x8e, 0xa5, 0xd9, 0x36, 0xf9, 0x87, 0x87, 0xc6, 0x0c, 0x7e, 0xbc,
             0x74, 0xe6, 0xce, 0x7c,
         ];
-        let key = RecoveryKey::from_root(&RootSecret::from_bytes(bytes).unwrap());
+        let key = RecoveryKey::from_root(&RootSecret::from_bytes(&mut bytes.clone()).unwrap());
         assert_eq!(
             key.words().as_str(),
             "hamster diagram private dutch cause delay private meat slide toddler razor book happy fancy gospel tennis maple dilemma loan word shrug inflict delay length"
