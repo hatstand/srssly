@@ -10,6 +10,7 @@
 //! `{"error": "<code>", "message": "..."}` on stderr and exits with status 1.
 
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -241,11 +242,24 @@ fn write(path: &Path, contents: &str) -> Result<(), CliError> {
     fs::write(path, contents).map_err(|e| CliError::io(path, e))
 }
 
+/// Writes a file holding a secret (a device or passkey file), readable only
+/// by its owner.
 fn write_json(path: &Path, value: &impl Serialize) -> Result<(), CliError> {
-    write(
-        path,
-        &serde_json::to_string_pretty(value).expect("serializable"),
-    )
+    let contents = serde_json::to_string_pretty(value).expect("serializable");
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(path).map_err(|e| CliError::io(path, e))?;
+    // `mode` only applies to new files; tighten an existing one too.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        file.set_permissions(fs::Permissions::from_mode(0o600))
+            .map_err(|e| CliError::io(path, e))?;
+    }
+    file.write_all(contents.as_bytes())
+        .map_err(|e| CliError::io(path, e))
 }
 
 fn decode(s: &str, what: &str) -> Result<Vec<u8>, CliError> {
@@ -298,8 +312,8 @@ fn run(cli: Cli) -> Result<Value, CliError> {
         } => {
             let (id, prf) = passkey.resolve()?;
             let (keys, root) = AccountKeys::create_with_prf(&id, &prf, &label)?;
-            write_account(&account, &keys)?;
             write_json(&device, &Device::new(&keys, &root))?;
+            write_account(&account, &keys)?;
             Ok(summary(&keys))
         }
         Command::Unlock {
@@ -368,8 +382,10 @@ fn run(cli: Cli) -> Result<Value, CliError> {
             let mut keys = read_account(&account)?;
             let root = read_json::<Device>(&device)?.root()?;
             let new_root = keys.rotate(&root)?;
-            write_account(&account, &keys)?;
+            // Keep the new secret before publishing the record sealed to it,
+            // as an app must: the other order can lose the account's keys.
             write_json(&device, &Device::new(&keys, &new_root))?;
+            write_account(&account, &keys)?;
             Ok(summary(&keys))
         }
         Command::RecoveryKey { device } => {

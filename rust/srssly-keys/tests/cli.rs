@@ -63,6 +63,33 @@ impl Env {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn secret_files_are_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let e = Env::new();
+    let mode = |name| {
+        std::fs::metadata(e.path(name))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777
+    };
+    std::fs::write(e.path("a.json"), "").unwrap();
+    std::fs::set_permissions(e.path("a.json"), std::fs::Permissions::from_mode(0o644)).unwrap();
+    e.new_passkey("a.json");
+    e.ok(&[
+        "create",
+        "--account",
+        "acct",
+        "--device",
+        "d",
+        "--passkey",
+        "a.json",
+    ]);
+    assert_eq!((mode("a.json"), mode("d")), (0o600, 0o600));
+}
+
 #[test]
 fn software_passkeys() {
     let e = Env::new();
