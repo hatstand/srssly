@@ -79,14 +79,17 @@ itself (format version 2):
   binding MAC can't be revoked, so a relay that kept a record from before a
   rotation can serve one that a former root holder rotated differently, and
   an old binding vouches for it.
-- **Devices that have seen the account check for forks.** After each
-  successful unlock or `verify`, store `known_epoch()` (public values: epoch,
-  key check, auth public key, revision) beside the root. Before trusting a
-  fetched record, and above all before unlocking with a passkey again because
-  the root no longer matches, call `verify_successor(&known)`. It refuses a
-  record whose chain doesn't pass through the known epoch's keys (`tampered`)
-  or whose revision is lower (`stale`), so a fork from any epoch up to the
-  known one fails.
+- **Devices that have seen the account check for forks.** `verify(&root)`
+  and `verify_successor` return a `KnownEpoch` (public values: epoch, key
+  check, auth public key, revision). Store it beside the root, but only for a
+  record the relay holds (one just fetched, or an upload it accepted): a
+  local change it never got would make its record look stale. Before
+  trusting a fetched record, and above all before unlocking with a passkey
+  again because the root no longer matches, call `verify_successor(&known)`.
+  It refuses a record whose chain doesn't pass through the known epoch's keys
+  (`tampered`) or whose revision is lower (`stale`). So a fork made with any
+  root older than the known epoch fails; a device is protected from a
+  former root holder only once it has seen the rotation that evicted them.
 - **Not covered:** a brand-new device has nothing to compare, so its first
   sign-in trusts the relay not to collude with a former root holder, and not
   to serve an older, validly signed record. A comparison code shown on an
