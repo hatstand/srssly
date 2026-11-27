@@ -41,7 +41,12 @@ impl Env {
             .spawn()
             .unwrap();
         let mut input = child.stdin.take().unwrap();
-        input.write_all(stdin.as_bytes()).unwrap();
+        // A command that fails before reading stdin closes it early; that
+        // is not a test failure, so ignore the broken pipe.
+        match input.write_all(stdin.as_bytes()) {
+            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+            r => r.unwrap(),
+        }
         drop(input);
         let out = child.wait_with_output().unwrap();
         let stream = if out.status.success() {
