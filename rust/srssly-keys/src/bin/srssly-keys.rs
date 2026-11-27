@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use srssly_keys::{
     AccountId, AccountKeys, CredentialIdHash, Error, PRF_INPUT, PrfAuthenticator, PrfOutput,
-    RootSecret, SoftPasskey,
+    RecoveryKey, RootSecret, SoftPasskey,
 };
 
 #[derive(Parser)]
@@ -82,6 +82,29 @@ enum Command {
         /// A software passkey file.
         #[arg(long)]
         passkey: Option<PathBuf>,
+    },
+    /// Replace the root secret and re-seal it to every passkey.
+    Rotate {
+        #[arg(long)]
+        account: PathBuf,
+        /// An unlocked device; updated with the new secret.
+        #[arg(long)]
+        device: PathBuf,
+    },
+    /// Print the recovery key (24 words) for an unlocked device.
+    RecoveryKey {
+        #[arg(long)]
+        device: PathBuf,
+    },
+    /// Unlock with a recovery key.
+    Recover {
+        #[arg(long)]
+        account: PathBuf,
+        /// The 24 words, in one argument.
+        #[arg(long)]
+        words: String,
+        #[arg(long)]
+        device_out: Option<PathBuf>,
     },
     /// Check a device's root secret against the account and show its public keys.
     Verify {
@@ -337,6 +360,30 @@ fn run(cli: Cli) -> Result<Value, CliError> {
             let mut out = summary(&keys);
             out["removed"] = json!(removed.label);
             Ok(out)
+        }
+        Command::Rotate { account, device } => {
+            let mut keys = read_account(&account)?;
+            let root = read_json::<Device>(&device)?.root()?;
+            let new_root = keys.rotate(&root)?;
+            write_account(&account, &keys)?;
+            write_json(&device, &Device::new(&keys, &new_root))?;
+            Ok(summary(&keys))
+        }
+        Command::RecoveryKey { device } => {
+            let root = read_json::<Device>(&device)?.root()?;
+            Ok(json!({ "words": RecoveryKey::from_root(&root).words() }))
+        }
+        Command::Recover {
+            account,
+            words,
+            device_out,
+        } => {
+            let keys = read_account(&account)?;
+            let root = keys.unlock_with_recovery_key(&RecoveryKey::parse(&words)?)?;
+            if let Some(path) = device_out {
+                write_json(&path, &Device::new(&keys, &root))?;
+            }
+            Ok(summary(&keys))
         }
         Command::Verify { account, device } => {
             let keys = read_account(&account)?;
