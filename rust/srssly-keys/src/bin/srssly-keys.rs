@@ -47,6 +47,16 @@ enum Command {
         #[arg(long, default_value = "passkey")]
         label: String,
     },
+    /// Unlock the root secret with a passkey.
+    Unlock {
+        #[arg(long)]
+        account: PathBuf,
+        #[command(flatten)]
+        passkey: PasskeyArgs,
+        /// Save the unlocked root secret here.
+        #[arg(long)]
+        device_out: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -56,21 +66,47 @@ enum PasskeyCommand {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Evaluate a software passkey's PRF, as a browser would report it.
+    Prf {
+        #[arg(long)]
+        passkey: PathBuf,
+        /// The WebAuthn PRF input; defaults to the one Srssly uses.
+        #[arg(long)]
+        input: Option<String>,
+    },
 }
 
-/// The passkey to use: a software passkey file.
+/// Either a software passkey file, or a credential ID and PRF output taken
+/// from a real authenticator (for example a browser's WebAuthn PRF result).
 #[derive(Args)]
 struct PasskeyArgs {
     /// A software passkey file.
-    #[arg(long)]
-    passkey: PathBuf,
+    #[arg(long, required_unless_present = "prf", conflicts_with_all = ["credential_id", "prf"])]
+    passkey: Option<PathBuf>,
+    /// Credential ID, base64url.
+    #[arg(long, requires = "prf", allow_hyphen_values = true)]
+    credential_id: Option<String>,
+    /// PRF output for Srssly's PRF input, base64url (32 bytes).
+    #[arg(long, requires = "credential_id", allow_hyphen_values = true)]
+    prf: Option<String>,
 }
 
 impl PasskeyArgs {
     fn resolve(&self) -> Result<(Vec<u8>, PrfOutput), CliError> {
-        let pk: SoftPasskey = read_json(&self.passkey)?;
-        let prf = pk.evaluate_prf(PRF_INPUT)?;
-        Ok((pk.credential_id().to_vec(), prf))
+        if let Some(path) = &self.passkey {
+            let pk: SoftPasskey = read_json(path)?;
+            let prf = pk.evaluate_prf(PRF_INPUT)?;
+            return Ok((pk.credential_id().to_vec(), prf));
+        }
+        let id = decode(
+            self.credential_id.as_deref().unwrap_or_default(),
+            "credential ID",
+        )?;
+        let prf = decode(self.prf.as_deref().unwrap_or_default(), "PRF output")?;
+        let prf: [u8; 32] = prf
+            .try_into()
+            .map_err(|_| CliError::usage("PRF output must be 32 bytes"))?;
+        Ok((id, PrfOutput::from_bytes(prf)))
     }
 }
 
@@ -98,6 +134,14 @@ struct CliError {
 }
 
 impl CliError {
+    fn usage(message: impl Into<String>) -> Self {
+        let message = message.into();
+        Self {
+            code: "usage",
+            message,
+        }
+    }
+
     fn io(path: &Path, e: impl std::fmt::Display) -> Self {
         let message = format!("{}: {e}", path.display());
         Self {
@@ -138,6 +182,15 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<(), CliError> {
     )
 }
 
+fn decode(s: &str, what: &str) -> Result<Vec<u8>, CliError> {
+    B64.decode(s)
+        .map_err(|_| CliError::usage(format!("{what} is not valid base64url")))
+}
+
+fn read_account(path: &Path) -> Result<AccountKeys, CliError> {
+    Ok(AccountKeys::from_json(&read(path)?)?)
+}
+
 fn write_account(path: &Path, keys: &AccountKeys) -> Result<(), CliError> {
     write(path, &keys.to_json())
 }
@@ -162,6 +215,15 @@ fn run(cli: Cli) -> Result<Value, CliError> {
                 "credential_id_hash": CredentialIdHash::of(pk.credential_id()).to_base64url(),
             }))
         }
+        Command::Passkey(PasskeyCommand::Prf { passkey, input }) => {
+            let pk: SoftPasskey = read_json(&passkey)?;
+            let input = input.map_or(PRF_INPUT.to_vec(), String::into_bytes);
+            let prf = pk.evaluate_prf(&input)?;
+            Ok(json!({
+                "credential_id": B64.encode(pk.credential_id()),
+                "prf": B64.encode(prf.as_bytes()),
+            }))
+        }
         Command::Create {
             account,
             device,
@@ -172,6 +234,19 @@ fn run(cli: Cli) -> Result<Value, CliError> {
             let (keys, root) = AccountKeys::create_with_prf(&id, &prf, &label)?;
             write_account(&account, &keys)?;
             write_json(&device, &Device::new(&keys, &root))?;
+            Ok(summary(&keys))
+        }
+        Command::Unlock {
+            account,
+            passkey,
+            device_out,
+        } => {
+            let keys = read_account(&account)?;
+            let (id, prf) = passkey.resolve()?;
+            let root = keys.unlock_with_prf(&id, &prf)?;
+            if let Some(path) = device_out {
+                write_json(&path, &Device::new(&keys, &root))?;
+            }
             Ok(summary(&keys))
         }
     }
