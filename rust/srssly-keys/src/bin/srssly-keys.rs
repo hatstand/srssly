@@ -48,7 +48,8 @@ enum Command {
         #[arg(long, default_value = "passkey")]
         label: String,
     },
-    /// Unlock the root secret with a passkey.
+    /// Unlock the root secret with a passkey. If the passkey was bound before
+    /// the last rotation, rebind it and update the account file.
     Unlock {
         #[arg(long)]
         account: PathBuf,
@@ -324,13 +325,18 @@ fn run(cli: Cli) -> Result<Value, CliError> {
             passkey,
             device_out,
         } => {
-            let keys = read_account(&account)?;
+            let mut keys = read_account(&account)?;
             let (id, prf) = passkey.resolve()?;
-            let root = keys.unlock_with_prf(&id, &prf)?;
+            let (root, rebound) = keys.unlock_and_rebind_with_prf(&id, &prf)?;
             if let Some(path) = device_out {
                 write_json(&path, &Device::new(&keys, &root))?;
             }
-            Ok(summary(&keys))
+            if rebound {
+                write_account(&account, &keys)?;
+            }
+            let mut out = summary(&keys);
+            out["rebound"] = json!(rebound);
+            Ok(out)
         }
         Command::AddPasskey {
             account,

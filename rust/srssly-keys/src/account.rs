@@ -269,16 +269,56 @@ impl AccountKeys {
                 mac: [0; 32],
             },
         };
-        let link = self.epochs.last().expect("verified chain");
-        let message = binding_bytes(&self.account_id, link, &info);
-        info.binding.mac = binding_mac(prf)
-            .chain_update(message.bytes())
-            .finalize()
-            .into_bytes()
-            .into();
+        info.binding = self.current_binding(&info, prf);
         self.passkeys.push(info);
         self.sign(root);
         Ok(())
+    }
+
+    /// A binding for `info` at the current epoch.
+    fn current_binding(&self, info: &PasskeyInfo, prf: &PrfOutput) -> Binding {
+        let link = self.epochs.last().expect("a record has at least one epoch");
+        let message = binding_bytes(&self.account_id, link, info);
+        let mac = binding_mac(prf).chain_update(message.bytes()).finalize();
+        Binding {
+            epoch: self.epoch,
+            mac: mac.into_bytes().into(),
+        }
+    }
+
+    /// Unlocks with a passkey, then rebinds it to the current epoch if its
+    /// binding is from before a rotation. Returns the root and whether the
+    /// record changed; if it did, store the new record on the relay. Use this
+    /// rather than [`unlock`](Self::unlock) wherever the app can write back:
+    /// a passkey bound at an old epoch trusts the chain from there, which a
+    /// rotated-away root could have forked together with the relay.
+    pub fn unlock_and_rebind(
+        &mut self,
+        authenticator: &dyn PrfAuthenticator,
+    ) -> Result<(RootSecret, bool)> {
+        let prf = authenticator.evaluate_prf(PRF_INPUT)?;
+        self.unlock_and_rebind_with_prf(authenticator.credential_id(), &prf)
+    }
+
+    pub fn unlock_and_rebind_with_prf(
+        &mut self,
+        credential_id: &[u8],
+        prf: &PrfOutput,
+    ) -> Result<(RootSecret, bool)> {
+        let root = self.unlock_with_prf(credential_id, prf)?;
+        let hash = CredentialIdHash::of(credential_id);
+        let index = self
+            .passkeys
+            .iter()
+            .position(|p| p.credential_id_hash == hash);
+        let index = index.expect("unlock found it");
+        if self.passkeys[index].binding.epoch == self.epoch {
+            return Ok((root, false));
+        }
+        self.revision = self.next_revision()?;
+        self.passkeys[index].binding = self.current_binding(&self.passkeys[index], prf);
+        self.sign(&root);
+        Ok((root, true))
     }
 
     pub fn find(&self, credential_id_hash: &CredentialIdHash) -> Option<&PasskeyInfo> {
@@ -847,6 +887,23 @@ mod tests {
         assert_eq!(bound, [0, 1]);
         assert_eq!(keys.unlock(&a).unwrap(), root);
         assert_eq!(keys.unlock(&b).unwrap(), root);
+    }
+
+    #[test]
+    fn unlock_rebinds_passkeys_bound_before_a_rotation() {
+        let a = SoftPasskey::generate();
+        let (mut keys, root) = AccountKeys::create(&a, "a").unwrap();
+        assert_eq!(keys.unlock_and_rebind(&a).unwrap(), (root.clone(), false));
+        let root = keys.rotate(&root).unwrap();
+        let revision = keys.revision;
+        assert_eq!(keys.unlock_and_rebind(&a).unwrap(), (root.clone(), true));
+        assert_eq!(
+            (keys.passkeys[0].binding.epoch, keys.revision),
+            (1, revision + 1)
+        );
+        let back = AccountKeys::from_json(&keys.to_json()).unwrap();
+        assert_eq!(back.unlock(&a).unwrap(), root);
+        assert_eq!(keys.unlock_and_rebind(&a).unwrap(), (root, false));
     }
 
     #[test]
