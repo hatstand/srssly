@@ -1,6 +1,6 @@
 use std::fmt;
 
-use ed25519_dalek::{SigningKey, VerifyingKey};
+use ed25519_dalek::{Signer as _, SigningKey, VerifyingKey};
 use hkdf::Hkdf;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::Sha256;
@@ -64,10 +64,12 @@ impl RootSecret {
 
     /// The keys derived from this secret for `account`.
     pub fn derive(&self, account: &AccountId) -> DerivedKeys {
-        let auth_seed: [u8; 32] = self.expand(account, b"auth-key");
+        let mut auth_seed: [u8; 32] = self.expand(account, b"auth-key");
+        let auth_key = AuthKey(SigningKey::from_bytes(&auth_seed));
+        auth_seed.zeroize();
         DerivedKeys {
             data_key: DataKey(self.expand(account, b"data-key")),
-            auth_key: SigningKey::from_bytes(&auth_seed),
+            auth_key,
         }
     }
 }
@@ -97,13 +99,35 @@ impl fmt::Debug for RootSecret {
 pub struct DerivedKeys {
     pub data_key: DataKey,
     /// Ed25519 key that authenticates this account to the relay.
-    pub auth_key: SigningKey,
+    pub auth_key: AuthKey,
 }
 
 impl DerivedKeys {
     /// The relay identifies the account's current key by this public key.
     pub fn auth_public_key(&self) -> AuthPublicKey {
-        AuthPublicKey(self.auth_key.verifying_key())
+        self.auth_key.public_key()
+    }
+}
+
+/// The Ed25519 private key that authenticates an account to the relay. It
+/// can sign, but like [`RootSecret`] its bytes can't be read, and it is wiped
+/// when dropped.
+pub struct AuthKey(SigningKey);
+
+impl AuthKey {
+    pub fn public_key(&self) -> AuthPublicKey {
+        AuthPublicKey(self.0.verifying_key())
+    }
+
+    /// An Ed25519 signature of `message`.
+    pub fn sign(&self, message: &[u8]) -> [u8; 64] {
+        self.0.sign(message).to_bytes()
+    }
+}
+
+impl fmt::Debug for AuthKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "AuthKey({:?})", self.public_key())
     }
 }
 
@@ -195,7 +219,7 @@ pub(crate) mod tests {
         let b = root.derive(&account());
         assert_eq!(a.data_key.0, b.data_key.0);
         assert_eq!(a.auth_public_key(), b.auth_public_key());
-        assert_ne!(a.data_key.0, a.auth_key.to_bytes());
+        assert_ne!(a.data_key.0, a.auth_key.0.to_bytes());
         assert_ne!(&a.data_key.0[..16], root.key_check(&account()).as_bytes());
         let other = AccountId::from_bytes([8; 16]);
         assert_ne!(a.data_key.0, root.derive(&other).data_key.0);
@@ -237,6 +261,17 @@ pub(crate) mod tests {
         assert_eq!(format!("{root:?}"), "RootSecret(..)");
         let keys = root.derive(&account());
         assert_eq!(format!("{:?}", keys.data_key), "DataKey(..)");
+        let debug = format!("{:?}", keys.auth_key);
+        assert!(debug.starts_with("AuthKey(AuthPublicKey("), "{debug}");
+    }
+
+    #[test]
+    fn auth_key_signs_for_its_public_key() {
+        let keys = test_root(0).derive(&account());
+        let sig = ed25519_dalek::Signature::from_bytes(&keys.auth_key.sign(b"hi"));
+        let public = VerifyingKey::from_bytes(&keys.auth_public_key().to_bytes()).unwrap();
+        public.verify_strict(b"hi", &sig).unwrap();
+        assert!(public.verify_strict(b"ho", &sig).is_err());
     }
 
     /// Pins the derivation so other implementations (Swift, Kotlin, web) can
