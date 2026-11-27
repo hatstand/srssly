@@ -254,7 +254,9 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, CliError> {
 
 /// Reads a secret from a file, or from stdin for `-`, wiped after use.
 fn read_secret(path: &Path) -> Result<Zeroizing<String>, CliError> {
-    let mut s = Zeroizing::new(String::new());
+    // Sized up front so reading a real secret never reallocates and leaves
+    // an unwiped copy behind.
+    let mut s = Zeroizing::new(String::with_capacity(1024));
     if path == Path::new("-") {
         std::io::stdin()
             .read_to_string(&mut s)
@@ -271,7 +273,8 @@ fn read_secret(path: &Path) -> Result<Zeroizing<String>, CliError> {
 fn write_file(path: &Path, contents: &str, secret: bool) -> Result<(), CliError> {
     let err = |e| CliError::io(path, e);
     let mut tmp = path.as_os_str().to_owned();
-    tmp.push(format!(".tmp-{}", std::process::id()));
+    // Random, so a file left by a crashed run can't block this one.
+    tmp.push(format!(".tmp-{}", B64.encode(random_tag())));
     let tmp = PathBuf::from(tmp);
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -287,6 +290,12 @@ fn write_file(path: &Path, contents: &str, secret: bool) -> Result<(), CliError>
         return Err(err(e));
     }
     Ok(())
+}
+
+fn random_tag() -> [u8; 8] {
+    let mut tag = [0; 8];
+    getrandom::fill(&mut tag).expect("system random number generator failed");
+    tag
 }
 
 /// Writes a file holding a secret (a device or passkey file), readable only
