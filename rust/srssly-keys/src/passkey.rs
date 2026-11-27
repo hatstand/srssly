@@ -41,8 +41,12 @@ pub fn ctap_hmac_secret_salt(prf_input: &[u8]) -> [u8; 32] {
 pub struct PrfOutput([u8; 32]);
 
 impl PrfOutput {
-    pub fn from_bytes(bytes: [u8; 32]) -> Self {
-        Self(bytes)
+    /// `None` if the bytes are obviously not random (fewer than 8 distinct
+    /// values, as for [`RootSecret::from_bytes`](crate::RootSecret::from_bytes)):
+    /// a broken authenticator or bridge that returns zeros must not unlock or
+    /// register anything.
+    pub fn from_bytes(bytes: [u8; 32]) -> Option<Self> {
+        crate::keys::looks_random(&bytes).then_some(Self(bytes))
     }
 
     /// Crate-private, like [`RootSecret`](crate::RootSecret)'s bytes: the PRF
@@ -130,8 +134,19 @@ impl PasskeyKeyPair {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// A valid test PRF output: the bytes `first, first + 1, ..., first + 31`.
+    pub(crate) fn test_prf(first: u8) -> PrfOutput {
+        PrfOutput::from_bytes(std::array::from_fn(|i| first.wrapping_add(i as u8))).unwrap()
+    }
+
+    #[test]
+    fn rejects_obviously_non_random_prf_output() {
+        assert!(PrfOutput::from_bytes([0; 32]).is_none());
+        assert!(PrfOutput::from_bytes([7; 32]).is_none());
+    }
 
     #[test]
     fn ctap_salt_matches_webauthn_definition() {
@@ -143,8 +158,8 @@ mod tests {
 
     #[test]
     fn key_pair_is_deterministic_per_prf() {
-        let prf = PrfOutput::from_bytes([3; 32]);
-        let other = PrfOutput::from_bytes([4; 32]);
+        let prf = test_prf(3);
+        let other = test_prf(4);
         let public = |p| *PasskeyKeyPair::from_prf(p).public_key();
         assert_eq!(public(&prf), public(&prf));
         assert_ne!(public(&prf), public(&other));
@@ -176,9 +191,6 @@ mod tests {
 
     #[test]
     fn debug_hides_secrets() {
-        assert_eq!(
-            format!("{:?}", PrfOutput::from_bytes([1; 32])),
-            "PrfOutput(..)"
-        );
+        assert_eq!(format!("{:?}", test_prf(1)), "PrfOutput(..)");
     }
 }

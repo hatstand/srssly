@@ -96,12 +96,12 @@ impl WrappedSecret {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::passkey::PrfOutput;
+    use crate::passkey::tests::test_prf;
 
     fn setup() -> (RootSecret, PasskeyKeyPair, AccountId, CredentialIdHash) {
         (
             RootSecret::generate(),
-            PasskeyKeyPair::from_prf(&PrfOutput::from_bytes([5; 32])),
+            PasskeyKeyPair::from_prf(&test_prf(5)),
             AccountId::generate(),
             CredentialIdHash::of(b"cred"),
         )
@@ -127,7 +127,7 @@ mod tests {
     fn wrong_passkey_is_rejected() {
         let (root, kp, account, cred) = setup();
         let w = WrappedSecret::seal(&root, kp.public_key(), &account, 0, &cred).unwrap();
-        let other = PasskeyKeyPair::from_prf(&PrfOutput::from_bytes([6; 32]));
+        let other = PasskeyKeyPair::from_prf(&test_prf(6));
         assert_eq!(w.open(&other, &account, 0, &cred), Err(Error::WrongPasskey));
     }
 

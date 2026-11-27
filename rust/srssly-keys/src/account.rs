@@ -303,7 +303,7 @@ mod tests {
     fn record(root: &RootSecret) -> AccountKeys {
         let account_id = AccountId::generate();
         let credential_id_hash = CredentialIdHash::of(b"cred");
-        let key_pair = PasskeyKeyPair::from_prf(&PrfOutput::from_bytes([3; 32]));
+        let key_pair = PasskeyKeyPair::from_prf(&crate::passkey::tests::test_prf(3));
         let wrapped = WrappedSecret::seal(
             root,
             key_pair.public_key(),

@@ -162,7 +162,9 @@ impl PasskeyArgs {
         let prf: [u8; 32] = prf
             .try_into()
             .map_err(|_| CliError::usage("PRF output must be 32 bytes"))?;
-        Ok((id, PrfOutput::from_bytes(prf)))
+        let prf = PrfOutput::from_bytes(prf)
+            .ok_or_else(|| CliError::usage("PRF output is not random"))?;
+        Ok((id, prf))
     }
 }
 

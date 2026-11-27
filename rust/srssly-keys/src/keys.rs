@@ -78,7 +78,7 @@ impl RootSecret {
 /// from one sample, but this rejects zeros, repeated bytes and short patterns
 /// (a broken RNG, a test value, the all-"abandon" recovery phrase), while 32
 /// random bytes fail it with probability about 10^-37.
-fn looks_random(bytes: &[u8; 32]) -> bool {
+pub(crate) fn looks_random(bytes: &[u8; 32]) -> bool {
     // A bitmap of seen values in one cache line, rather than a 256-entry table.
     let mut seen = [0u64; 4];
     for &b in bytes {
