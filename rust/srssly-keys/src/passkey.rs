@@ -45,8 +45,17 @@ impl PrfOutput {
         Self(bytes)
     }
 
-    pub fn as_bytes(&self) -> &[u8; 32] {
+    /// Crate-private, like [`RootSecret`](crate::RootSecret)'s bytes: the PRF
+    /// output unlocks the root secret, so nothing outside the crate reads it.
+    pub(crate) fn as_bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+
+    /// The raw output, so the CLI can print what a browser would report.
+    /// Only built with `soft-passkey`: apps never need to read it back.
+    #[cfg(feature = "soft-passkey")]
+    pub fn export(&self) -> zeroize::Zeroizing<[u8; 32]> {
+        zeroize::Zeroizing::new(self.0)
     }
 }
 
