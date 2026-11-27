@@ -27,11 +27,28 @@ impl Env {
     }
 
     fn run(&self, args: &[&str]) -> Output {
-        let out = Command::new(env!("CARGO_BIN_EXE_srssly-keys"))
+        self.run_with_stdin(args, "")
+    }
+
+    fn run_with_stdin(&self, args: &[&str], stdin: &str) -> Output {
+        use std::io::Write as _;
+        let mut child = Command::new(env!("CARGO_BIN_EXE_srssly-keys"))
             .args(args)
             .current_dir(self.dir.path())
-            .output()
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
             .unwrap();
+        let mut input = child.stdin.take().unwrap();
+        // A command that fails before reading stdin closes it early; that
+        // is not a test failure, so ignore the broken pipe.
+        match input.write_all(stdin.as_bytes()) {
+            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+            r => r.unwrap(),
+        }
+        drop(input);
+        let out = child.wait_with_output().unwrap();
         let stream = if out.status.success() {
             &out.stdout
         } else {
@@ -112,6 +129,7 @@ fn raw_prf_matches_software_passkey() {
     let prf = e.ok(&["passkey", "prf", "--passkey", "a.json"]);
     let id = prf["credential_id"].as_str().unwrap();
     let out = prf["prf"].as_str().unwrap();
+    std::fs::write(e.path("prf.txt"), format!("{out}\n")).unwrap();
 
     e.ok(&[
         "create",
@@ -121,23 +139,25 @@ fn raw_prf_matches_software_passkey() {
         "dev.json",
         "--credential-id",
         id,
-        "--prf",
-        out,
+        "--prf-file",
+        "prf.txt",
     ]);
     e.ok(&["unlock", "--account", "acct.json", "--passkey", "a.json"]);
 
     let mut wrong = out.to_owned();
     wrong.replace_range(0..1, if wrong.starts_with('A') { "B" } else { "A" });
+    let unlock = [
+        "unlock",
+        "--account",
+        "acct.json",
+        "--credential-id",
+        id,
+        "--prf-file",
+        "-",
+    ];
+    assert_eq!(e.run_with_stdin(&unlock, out).json["epoch"], 0);
     assert_eq!(
-        e.err(&[
-            "unlock",
-            "--account",
-            "acct.json",
-            "--credential-id",
-            id,
-            "--prf",
-            &wrong
-        ]),
+        e.run_with_stdin(&unlock, &wrong).json["error"],
         "wrong_passkey"
     );
 }
@@ -385,12 +405,13 @@ fn recovery_key_and_rotation() {
         .unwrap()
         .to_owned();
     assert_eq!(words.split(' ').count(), 24);
+    std::fs::write(e.path("words.txt"), &words).unwrap();
     e.ok(&[
         "recover",
         "--account",
         "acct.json",
-        "--words",
-        &words,
+        "--words-file",
+        "words.txt",
         "--device-out",
         "recovered.json",
     ]);
@@ -426,10 +447,17 @@ fn recovery_key_and_rotation() {
         "recovered.json",
     ];
     assert_eq!(e.err(&stale), "wrong_root_secret");
-    let old_words = ["recover", "--account", "acct.json", "--words", &words];
+    let old_words = [
+        "recover",
+        "--account",
+        "acct.json",
+        "--words-file",
+        "words.txt",
+    ];
     assert_eq!(e.err(&old_words), "wrong_root_secret");
-    let bad_words = ["recover", "--account", "acct.json", "--words", "not words"];
-    assert_eq!(e.err(&bad_words), "invalid_recovery_key");
+    let bad_words = ["recover", "--account", "acct.json", "--words-file", "-"];
+    let bad = e.run_with_stdin(&bad_words, "not words");
+    assert_eq!(bad.json["error"], "invalid_recovery_key");
 }
 
 #[test]
@@ -449,8 +477,8 @@ fn errors_are_json_with_codes() {
         e.err(&["unlock", "--account", "bad.json", "--passkey", "a.json"]),
         "malformed"
     );
-    let raw = |id, prf| {
-        [
+    let raw = |id, prf: &str| {
+        let args = [
             "create",
             "--account",
             "a",
@@ -458,14 +486,18 @@ fn errors_are_json_with_codes() {
             "d",
             "--credential-id",
             id,
-            "--prf",
-            prf,
-        ]
+            "--prf-file",
+            "-",
+        ];
+        e.run_with_stdin(&args, prf).json["error"]
+            .as_str()
+            .unwrap()
+            .to_owned()
     };
-    assert_eq!(e.err(&raw("!!", "AA")), "usage");
-    assert_eq!(e.err(&raw("AA", "AA")), "usage");
+    assert_eq!(raw("!!", "AA"), "usage");
+    assert_eq!(raw("AA", "AA"), "usage");
     // 32 zero bytes: well-formed, but not a PRF output.
-    assert_eq!(e.err(&raw("AA", &"A".repeat(43))), "usage");
+    assert_eq!(raw("AA", &"A".repeat(43)), "usage");
 }
 
 #[test]
@@ -473,7 +505,7 @@ fn raw_values_may_start_with_a_hyphen() {
     // base64url uses '-', so a random credential ID or PRF can start with one.
     let e = Env::new();
     let prf = "-AECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
-    let created = e.ok(&[
+    let args = [
         "create",
         "--account",
         "a",
@@ -481,8 +513,41 @@ fn raw_values_may_start_with_a_hyphen() {
         "d",
         "--credential-id",
         "-AAA",
-        "--prf",
-        prf,
-    ]);
-    assert_eq!(created["epoch"], 0);
+        "--prf-file",
+        "-",
+    ];
+    let created = e.run_with_stdin(&args, prf);
+    assert_eq!(created.json["epoch"], 0);
+}
+
+#[test]
+fn writes_replace_files_whole_and_keep_secrets_private() {
+    let e = Env::new();
+    e.new_passkey("a.json");
+    std::fs::write(e.path("dev.json"), "old").unwrap();
+    let create = [
+        "create",
+        "--account",
+        "acct.json",
+        "--device",
+        "dev.json",
+        "--passkey",
+        "a.json",
+    ];
+    e.ok(&create);
+    e.ok(&["verify", "--account", "acct.json", "--device", "dev.json"]);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = |f| std::fs::metadata(e.path(f)).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode("dev.json"), 0o600);
+        assert_eq!(mode("a.json"), 0o600);
+    }
+    // No temporary files are left behind.
+    let names: Vec<_> = std::fs::read_dir(e.dir.path())
+        .unwrap()
+        .map(|f| f.unwrap().file_name().into_string().unwrap())
+        .filter(|n| n.contains(".tmp-"))
+        .collect();
+    assert!(names.is_empty(), "{names:?}");
 }
