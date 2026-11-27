@@ -1,0 +1,10 @@
+[package]
+name = "uniffi-bindgen"
+version = "0.1.0"
+edition = "2024"
+description = "Generates the Swift bindings for srssly-keys-ffi"
+publish = false
+
+[dependencies]
+# Must match the uniffi version in srssly-keys-ffi.
+uniffi = { version = "0.33.0", features = ["cli"] }

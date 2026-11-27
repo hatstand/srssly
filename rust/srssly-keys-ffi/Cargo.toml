@@ -1,0 +1,16 @@
+[package]
+name = "srssly-keys-ffi"
+version = "0.1.0"
+edition = "2024"
+description = "Swift bindings (UniFFI) for srssly-keys, built into the iOS app"
+publish = false
+
+[lib]
+# staticlib for the iOS xcframework (uniffi-bindgen reads the interface from
+# it too); lib for Rust tests.
+crate-type = ["lib", "staticlib"]
+
+[dependencies]
+# No CLI and no SoftPasskey in the app.
+srssly-keys = { path = "../srssly-keys", default-features = false }
+uniffi = { version = "0.33.0", default-features = false, features = ["macro-scaffolding"] }
