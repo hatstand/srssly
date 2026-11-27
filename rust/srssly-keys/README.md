@@ -52,8 +52,12 @@ these work:
 - **Recovering from a compromised device.** Rotation re-seals to the same
   passkey public keys, so anything that kept a passkey's PRF output opens
   the new root too; with a synced passkey, that is every device it reached.
-  Call `remove_and_rotate` with every passkey the device used, so they never
-  receive the new root, then register fresh credentials.
+  Verify the record and check the passkey list for entries the user doesn't
+  recognise (that device held the root and could have added its own).
+  Register a fresh credential, then call `remove_and_rotate` with every
+  passkey the device used, so they never receive the new root. The fresh
+  credential comes first: with one synced passkey there is nothing else
+  left to unlock with.
 
 ## Why the relay can't forge the record
 

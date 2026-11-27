@@ -474,8 +474,12 @@ impl AccountKeys {
     /// passkey public keys, and anything that kept a passkey's PRF output
     /// (a compromised device that unlocked with it, or any device a synced
     /// passkey reached) opens the new one too. To recover from a compromised
-    /// device, use [`remove_and_rotate`](Self::remove_and_rotate) with every
-    /// passkey that device used, then register fresh credentials.
+    /// device: [`verify`](Self::verify) the record and check its passkey list
+    /// for entries the user doesn't recognise (that device held the root and
+    /// could have added its own), register a fresh credential, then call
+    /// [`remove_and_rotate`](Self::remove_and_rotate) with every passkey the
+    /// device used. Fresh credential first: with one synced passkey, removing
+    /// it first would leave none.
     pub fn rotate(&mut self, current: &RootSecret) -> Result<RootSecret> {
         self.remove_and_rotate(current, &[])
     }
