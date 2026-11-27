@@ -6,9 +6,9 @@ core; Swift, Kotlin and WebAssembly bindings come later.
 
 ```sh
 cd rust
-cargo test                                   # unit tests and CLI end-to-end tests
-python3 srssly-keys/scripts/known_answers.py # independent check of the pinned test vectors (needs `cryptography`)
-cargo run -q -- --help                       # the CLI
+cargo test --all-features                            # unit tests and CLI end-to-end tests
+python3 srssly-keys/scripts/known_answers.py         # independent check of the pinned test vectors (needs `cryptography`)
+cargo run -q -p srssly-keys --features cli -- --help # the CLI
 ```
 
 ## How it works
@@ -51,8 +51,8 @@ Authenticators implement `PrfAuthenticator`. Today there is `SoftPasskey`, a
 software stand-in that behaves like a CTAP2 authenticator with
 `hmac-secret`: `HMAC-SHA-256(credRandom, SHA-256("WebAuthn PRF" ‖ 0x00 ‖ input))`. It is
 only compiled in tests or with the `soft-passkey` feature (which the `cli`
-feature turns on), so app builds, which use `default-features = false`,
-never contain it.
+feature turns on). No feature is on by default, so app builds never contain
+it; CI checks the iOS library for its symbols.
 Anything that can report a credential ID and PRF output (a browser, a
 platform passkey API) can also be used directly, through the `*_with_prf`
 functions or the CLI's `--credential-id`/`--prf` flags.

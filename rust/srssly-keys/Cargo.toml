@@ -21,7 +21,9 @@ thiserror = "2.0.21"
 zeroize = { version = "1.9.2", features = ["derive"] }
 
 [features]
-default = ["cli"]
+# Nothing by default, so a dependency (the app's FFI crate) or a workspace
+# build can't pull in the CLI, SoftPasskey or secret export by accident.
+default = []
 # The command-line tool for manual and automated key-management testing.
 cli = ["dep:clap", "export-root-secret", "soft-passkey"]
 # RootSecret::export and RecoveryKey::words, for code that must store or show
@@ -32,6 +34,10 @@ soft-passkey = []
 
 [[bin]]
 name = "srssly-keys"
+required-features = ["cli"]
+
+[[test]]
+name = "cli"
 required-features = ["cli"]
 
 [dev-dependencies]
