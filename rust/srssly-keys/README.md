@@ -16,7 +16,8 @@ cargo run -q -- --help                       # the CLI
 Each account has one random 32-byte **root secret**. It never leaves a device
 unencrypted. `RootSecret` has no public way to read its bytes; code that must
 store them (the platform keychain, the CLI's test device file) enables the
-`export-root-secret` feature and calls `RootSecret::export`.
+`export-root-secret` feature and calls `RootSecret::export`. The same feature
+gates `RecoveryKey::words`, since the words are the secret.
 Every way of making a `RootSecret` (generating, unsealing, a recovery phrase,
 raw bytes) rejects bytes with fewer than 8 distinct values. That can't prove a
 secret is random, but it catches zeros, repeated bytes, short patterns and a

@@ -1,12 +1,14 @@
 use std::fmt;
 
 use bip39::Mnemonic;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::keys::{RootSecret, looks_random};
 use crate::{Error, Result};
 
 /// The root secret written as 24 BIP39 English words, for recovery when
-/// every passkey is gone.
+/// every passkey is gone. The words are the root secret, so reading them
+/// needs the `export-root-secret` feature; the phrase is wiped on drop.
 pub struct RecoveryKey(Mnemonic);
 
 impl RecoveryKey {
@@ -18,13 +20,16 @@ impl RecoveryKey {
     /// Rejects phrases whose secret is obviously not random, such as
     /// "abandon abandon ... art".
     pub fn parse(words: &str) -> Result<Self> {
-        let normalized = words
-            .split_whitespace()
-            .map(str::to_lowercase)
-            .collect::<Vec<_>>()
-            .join(" ");
-        let m =
-            Mnemonic::parse(normalized).map_err(|e| Error::InvalidRecoveryKey(e.to_string()))?;
+        // Built in place, sized up front, so no stray copy of the phrase is left.
+        let mut normalized = Zeroizing::new(String::with_capacity(words.len()));
+        for word in words.split_whitespace() {
+            if !normalized.is_empty() {
+                normalized.push(' ');
+            }
+            normalized.extend(word.chars().flat_map(char::to_lowercase));
+        }
+        let m = Mnemonic::parse(normalized.as_str())
+            .map_err(|e| Error::InvalidRecoveryKey(e.to_string()))?;
         if m.word_count() != 24 {
             return Err(Error::InvalidRecoveryKey(format!(
                 "expected 24 words, got {}",
@@ -38,20 +43,24 @@ impl RecoveryKey {
     }
 
     pub fn root_secret(&self) -> RootSecret {
-        RootSecret::from_bytes(entropy(&self.0)).expect("checked when parsed")
+        RootSecret::from_bytes(*entropy(&self.0)).expect("checked when parsed")
     }
 
-    pub fn words(&self) -> String {
-        self.0.to_string()
+    /// The 24 words, to show the user once. Only built with
+    /// `export-root-secret`, since they are the root secret.
+    #[cfg(any(test, feature = "export-root-secret"))]
+    pub fn words(&self) -> Zeroizing<String> {
+        Zeroizing::new(self.0.to_string())
     }
 }
 
 /// The 32 bytes a 24-word phrase encodes.
-fn entropy(m: &Mnemonic) -> [u8; 32] {
-    let (entropy, len) = m.to_entropy_array();
+fn entropy(m: &Mnemonic) -> Zeroizing<[u8; 32]> {
+    let (mut entropy, len) = m.to_entropy_array();
     debug_assert_eq!(len, 32);
-    let mut bytes = [0u8; 32];
+    let mut bytes = Zeroizing::new([0u8; 32]);
     bytes.copy_from_slice(&entropy[..32]);
+    entropy.zeroize();
     bytes
 }
 
@@ -72,7 +81,9 @@ mod tests {
         let key = RecoveryKey::from_root(&root);
         assert_eq!(key.words().split(' ').count(), 24);
         assert_eq!(
-            RecoveryKey::parse(&key.words()).unwrap().root_secret(),
+            RecoveryKey::parse(key.words().as_str())
+                .unwrap()
+                .root_secret(),
             root
         );
     }
@@ -120,7 +131,7 @@ mod tests {
         ];
         let key = RecoveryKey::from_root(&RootSecret::from_bytes(bytes).unwrap());
         assert_eq!(
-            key.words(),
+            key.words().as_str(),
             "hamster diagram private dutch cause delay private meat slide toddler razor book happy fancy gospel tennis maple dilemma loan word shrug inflict delay length"
         );
     }

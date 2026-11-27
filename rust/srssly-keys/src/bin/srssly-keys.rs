@@ -371,7 +371,7 @@ fn run(cli: Cli) -> Result<Value, CliError> {
         }
         Command::RecoveryKey { device } => {
             let root = read_json::<Device>(&device)?.root()?;
-            Ok(json!({ "words": RecoveryKey::from_root(&root).words() }))
+            Ok(json!({ "words": RecoveryKey::from_root(&root).words().as_str() }))
         }
         Command::Recover {
             account,

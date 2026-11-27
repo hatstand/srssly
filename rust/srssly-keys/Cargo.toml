@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 base64 = "0.23.1"
-bip39 = "3.0.0"
+bip39 = { version = "3.0.0", features = ["zeroize"] }
 clap = { version = "4.6.10", features = ["derive"], optional = true }
 ed25519-dalek = "3.0.0"
 getrandom = "0.4.3"
@@ -24,7 +24,8 @@ zeroize = { version = "1.9.2", features = ["derive"] }
 default = ["cli"]
 # The command-line tool for manual and automated key-management testing.
 cli = ["dep:clap", "export-root-secret", "soft-passkey"]
-# RootSecret::export, for code that must store the raw secret (keychain, CLI).
+# RootSecret::export and RecoveryKey::words, for code that must store or show
+# the raw secret (keychain, recovery key screen, CLI).
 export-root-secret = []
 # SoftPasskey, a software passkey for tests and the CLI. Never enable it in an app.
 soft-passkey = []
