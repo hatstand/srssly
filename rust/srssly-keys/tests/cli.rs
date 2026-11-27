@@ -69,7 +69,46 @@ fn software_passkeys() {
     let a = e.new_passkey("a.json");
     let b = e.new_passkey("b.json");
     assert_ne!(a["credential_id"], b["credential_id"]);
-    assert!(e.path("a.json").exists());
+}
+
+#[test]
+fn create_account() {
+    let e = Env::new();
+    e.new_passkey("a.json");
+    let created = e.ok(&[
+        "create",
+        "--account",
+        "acct.json",
+        "--device",
+        "dev.json",
+        "--passkey",
+        "a.json",
+        "--label",
+        "laptop",
+    ]);
+    assert_eq!(created["epoch"], 0);
+    assert_eq!(created["passkeys"], 1);
+    let account = std::fs::read_to_string(e.path("acct.json")).unwrap();
+    assert!(account.contains("\"laptop\""));
+}
+
+#[test]
+fn account_file_holds_no_secrets() {
+    let e = Env::new();
+    e.new_passkey("a.json");
+    e.ok(&[
+        "create",
+        "--account",
+        "acct.json",
+        "--device",
+        "dev.json",
+        "--passkey",
+        "a.json",
+    ]);
+    let account = std::fs::read_to_string(e.path("acct.json")).unwrap();
+    let device: Value =
+        serde_json::from_str(&std::fs::read_to_string(e.path("dev.json")).unwrap()).unwrap();
+    assert!(!account.contains(device["root_secret"].as_str().unwrap()));
 }
 
 #[test]
@@ -79,4 +118,18 @@ fn errors_are_json_with_codes() {
         e.err(&["passkey", "new", "--out", "missing-dir/a.json"]),
         "io"
     );
+    let create = |pk| {
+        [
+            "create",
+            "--account",
+            "a.json",
+            "--device",
+            "d.json",
+            "--passkey",
+            pk,
+        ]
+    };
+    assert_eq!(e.err(&create("missing.json")), "io");
+    std::fs::write(e.path("bad.json"), "{}").unwrap();
+    assert_eq!(e.err(&create("bad.json")), "malformed");
 }

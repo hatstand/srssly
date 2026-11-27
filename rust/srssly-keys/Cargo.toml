@@ -23,7 +23,9 @@ zeroize = { version = "1.9.2", features = ["derive"] }
 [features]
 default = ["cli"]
 # The command-line tool for manual and automated key-management testing.
-cli = ["dep:clap", "soft-passkey"]
+cli = ["dep:clap", "export-root-secret", "soft-passkey"]
+# RootSecret::export, for code that must store the raw secret (keychain, CLI).
+export-root-secret = []
 # SoftPasskey, a software passkey for tests and the CLI. Never enable it in an app.
 soft-passkey = []
 
