@@ -25,6 +25,11 @@ jobs:
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
       - run: cargo build --locked --no-default-features
+      - name: Generate the Swift bindings
+        run: |
+          cargo build --locked -p srssly-keys-ffi --lib
+          cargo run --locked -p uniffi-bindgen -- generate --library target/debug/libsrssly_keys_ffi.a --language swift --out-dir target/swift
+          grep -q "public func formatVersion" target/swift/SrsslyKeys.swift
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"

@@ -1,0 +1,4 @@
+[bindings.swift]
+module_name = "SrsslyKeys"
+ffi_module_name = "SrsslyKeysFFI"
+ffi_module_filename = "SrsslyKeysFFI"
