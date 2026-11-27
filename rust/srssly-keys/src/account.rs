@@ -121,7 +121,9 @@ fn binding_bytes(account: &AccountId, link: &EpochLink, p: &PasskeyInfo) -> Tran
 pub const MAX_RECORD_BYTES: usize = 1 << 20;
 pub const MAX_PASSKEYS: usize = 32;
 pub const MAX_LABEL_BYTES: usize = 128;
-/// One link per rotation, so this is also the most rotations an account gets.
+/// One link per rotation, so this is a lifetime cap: once an account has
+/// this many epochs, rotation is refused for good. Pruning the chain (a link
+/// signed by the current root that restarts it) is future work.
 pub const MAX_EPOCHS: usize = 1024;
 
 /// The key record the relay stores for an account. Everything in it is safe
@@ -329,10 +331,10 @@ impl AccountKeys {
             return Err(Error::DuplicatePasskey);
         }
         if label.len() > MAX_LABEL_BYTES {
-            return Err(Error::Malformed("label too long"));
+            return Err(Error::LimitReached("label too long"));
         }
         if self.passkeys.len() >= MAX_PASSKEYS {
-            return Err(Error::Malformed("too many passkeys"));
+            return Err(Error::LimitReached("too many passkeys"));
         }
         let key_pair = PasskeyKeyPair::from_prf(prf);
         let wrapped = WrappedSecret::seal(
@@ -520,7 +522,7 @@ impl AccountKeys {
             return Err(Error::LastPasskey);
         }
         if self.epochs.len() >= MAX_EPOCHS {
-            return Err(Error::Malformed("too many epochs"));
+            return Err(Error::LimitReached("too many epochs"));
         }
         let root = RootSecret::generate();
         let epoch = self.epoch.checked_add(1).ok_or(Error::Malformed("epoch"))?;
@@ -823,7 +825,7 @@ mod tests {
         let pk = SoftPasskey::generate();
         assert_eq!(
             keys.add_passkey(&root, &pk, &too_long),
-            Err(Error::Malformed("label too long"))
+            Err(Error::LimitReached("label too long"))
         );
         for _ in 1..MAX_PASSKEYS {
             keys.add_passkey(
@@ -835,13 +837,16 @@ mod tests {
         }
         assert_eq!(
             keys.add_passkey(&root, &pk, "a"),
-            Err(Error::Malformed("too many passkeys"))
+            Err(Error::LimitReached("too many passkeys"))
         );
         parse(&keys).unwrap();
         keys.passkeys.truncate(1);
         keys.epochs = vec![keys.epochs[0].clone(); MAX_EPOCHS];
         keys.sign(&root);
-        assert_eq!(keys.rotate(&root), Err(Error::Malformed("too many epochs")));
+        assert_eq!(
+            keys.rotate(&root),
+            Err(Error::LimitReached("too many epochs"))
+        );
     }
 
     #[test]
