@@ -174,9 +174,11 @@ impl AccountKeys {
         Ok(root)
     }
 
-    /// Removes a passkey so it can no longer unlock the account. It does not
-    /// revoke a device that already unlocked the root secret; use
-    /// [`rotate`](Self::rotate) for that. Refuses to remove the last passkey.
+    /// Removes a passkey from the record. That is not revocation: a device
+    /// that already unlocked the root secret keeps it, and the removed passkey
+    /// still opens any older copy of the record (a backup, or one the relay
+    /// kept) until the next [`rotate`](Self::rotate). Rotate after removing a
+    /// lost passkey. Refuses to remove the last passkey.
     pub fn remove_passkey(&mut self, credential_id_hash: &CredentialIdHash) -> Result<PasskeyInfo> {
         let index = self
             .passkeys
@@ -230,7 +232,30 @@ impl AccountKeys {
         if v.version != FORMAT_VERSION {
             return Err(Error::UnsupportedVersion(v.version));
         }
-        serde_json::from_str(json).map_err(|_| Error::Malformed("account keys"))
+        let keys: Self =
+            serde_json::from_str(json).map_err(|_| Error::Malformed("account keys"))?;
+        keys.validate()?;
+        Ok(keys)
+    }
+
+    /// Checks what serde can't: at least one passkey, no credential twice,
+    /// and every wrapped secret the length a sealed root secret has.
+    fn validate(&self) -> Result<()> {
+        if self.passkeys.is_empty() {
+            return Err(Error::Malformed("no passkeys"));
+        }
+        for (i, p) in self.passkeys.iter().enumerate() {
+            if self.passkeys[..i]
+                .iter()
+                .any(|q| q.credential_id_hash == p.credential_id_hash)
+            {
+                return Err(Error::DuplicatePasskey);
+            }
+            if p.wrapped.ciphertext.len() != WrappedSecret::CIPHERTEXT_LEN {
+                return Err(Error::Malformed("wrapped secret"));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -303,7 +328,7 @@ mod tests {
     fn record(root: &RootSecret) -> AccountKeys {
         let account_id = AccountId::generate();
         let credential_id_hash = CredentialIdHash::of(b"cred");
-        let key_pair = PasskeyKeyPair::from_prf(&PrfOutput::from_bytes([3; 32]));
+        let key_pair = PasskeyKeyPair::from_prf(&crate::passkey::tests::test_prf(3));
         let wrapped = WrappedSecret::seal(
             root,
             key_pair.public_key(),
@@ -353,9 +378,25 @@ mod tests {
     }
 
     #[test]
+    fn from_json_rejects_inconsistent_records() {
+        let keys = record(&RootSecret::generate());
+        let parse = |k: &AccountKeys| AccountKeys::from_json(&k.to_json());
+        let mut empty = keys.clone();
+        empty.passkeys.clear();
+        assert_eq!(parse(&empty), Err(Error::Malformed("no passkeys")));
+        let mut twice = keys.clone();
+        twice.passkeys.push(keys.passkeys[0].clone());
+        assert_eq!(parse(&twice), Err(Error::DuplicatePasskey));
+        let mut long = keys.clone();
+        long.passkeys[0].wrapped.ciphertext.push(0);
+        assert_eq!(parse(&long), Err(Error::Malformed("wrapped secret")));
+    }
+
+    #[test]
     fn json_holds_no_secrets() {
         let bytes: [u8; 32] = std::array::from_fn(|i| 0x5a ^ i as u8);
-        let json = record(&RootSecret::from_bytes(bytes).unwrap()).to_json();
+        let root = RootSecret::from_bytes(&mut bytes.clone()).unwrap();
+        let json = record(&root).to_json();
         assert!(!json.contains(&b64::encode(&bytes)));
     }
 

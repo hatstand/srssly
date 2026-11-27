@@ -10,6 +10,7 @@
 //! `{"error": "<code>", "message": "..."}` on stderr and exits with status 1.
 
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -159,10 +160,12 @@ impl PasskeyArgs {
             "credential ID",
         )?;
         let prf = decode(self.prf.as_deref().unwrap_or_default(), "PRF output")?;
-        let prf: [u8; 32] = prf
+        let mut prf: [u8; 32] = prf
             .try_into()
             .map_err(|_| CliError::usage("PRF output must be 32 bytes"))?;
-        Ok((id, PrfOutput::from_bytes(prf)))
+        let prf = PrfOutput::from_bytes(&mut prf)
+            .ok_or_else(|| CliError::usage("PRF output is not random"))?;
+        Ok((id, prf))
     }
 }
 
@@ -184,10 +187,11 @@ impl Device {
     }
 
     fn root(&self) -> Result<RootSecret, CliError> {
-        let bytes: [u8; 32] = decode(&self.root_secret, "root secret")?
+        let mut bytes: [u8; 32] = decode(&self.root_secret, "root secret")?
             .try_into()
             .map_err(|_| CliError::usage("root secret must be 32 bytes"))?;
-        RootSecret::from_bytes(bytes).ok_or_else(|| CliError::usage("root secret is not random"))
+        RootSecret::from_bytes(&mut bytes)
+            .ok_or_else(|| CliError::usage("root secret is not random"))
     }
 }
 
@@ -238,11 +242,24 @@ fn write(path: &Path, contents: &str) -> Result<(), CliError> {
     fs::write(path, contents).map_err(|e| CliError::io(path, e))
 }
 
+/// Writes a file holding a secret (a device or passkey file), readable only
+/// by its owner.
 fn write_json(path: &Path, value: &impl Serialize) -> Result<(), CliError> {
-    write(
-        path,
-        &serde_json::to_string_pretty(value).expect("serializable"),
-    )
+    let contents = serde_json::to_string_pretty(value).expect("serializable");
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(path).map_err(|e| CliError::io(path, e))?;
+    // `mode` only applies to new files; tighten an existing one too.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        file.set_permissions(fs::Permissions::from_mode(0o600))
+            .map_err(|e| CliError::io(path, e))?;
+    }
+    file.write_all(contents.as_bytes())
+        .map_err(|e| CliError::io(path, e))
 }
 
 fn decode(s: &str, what: &str) -> Result<Vec<u8>, CliError> {
@@ -295,8 +312,8 @@ fn run(cli: Cli) -> Result<Value, CliError> {
         } => {
             let (id, prf) = passkey.resolve()?;
             let (keys, root) = AccountKeys::create_with_prf(&id, &prf, &label)?;
-            write_account(&account, &keys)?;
             write_json(&device, &Device::new(&keys, &root))?;
+            write_account(&account, &keys)?;
             Ok(summary(&keys))
         }
         Command::Unlock {
@@ -365,13 +382,15 @@ fn run(cli: Cli) -> Result<Value, CliError> {
             let mut keys = read_account(&account)?;
             let root = read_json::<Device>(&device)?.root()?;
             let new_root = keys.rotate(&root)?;
-            write_account(&account, &keys)?;
+            // Keep the new secret before publishing the record sealed to it,
+            // as an app must: the other order can lose the account's keys.
             write_json(&device, &Device::new(&keys, &new_root))?;
+            write_account(&account, &keys)?;
             Ok(summary(&keys))
         }
         Command::RecoveryKey { device } => {
             let root = read_json::<Device>(&device)?.root()?;
-            Ok(json!({ "words": RecoveryKey::from_root(&root).words() }))
+            Ok(json!({ "words": RecoveryKey::from_root(&root).words().as_str() }))
         }
         Command::Recover {
             account,

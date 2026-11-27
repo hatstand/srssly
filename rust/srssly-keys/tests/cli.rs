@@ -63,6 +63,33 @@ impl Env {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn secret_files_are_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let e = Env::new();
+    let mode = |name| {
+        std::fs::metadata(e.path(name))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777
+    };
+    std::fs::write(e.path("a.json"), "").unwrap();
+    std::fs::set_permissions(e.path("a.json"), std::fs::Permissions::from_mode(0o644)).unwrap();
+    e.new_passkey("a.json");
+    e.ok(&[
+        "create",
+        "--account",
+        "acct",
+        "--device",
+        "d",
+        "--passkey",
+        "a.json",
+    ]);
+    assert_eq!((mode("a.json"), mode("d")), (0o600, 0o600));
+}
+
 #[test]
 fn software_passkeys() {
     let e = Env::new();
@@ -422,13 +449,15 @@ fn errors_are_json_with_codes() {
     };
     assert_eq!(e.err(&raw("!!", "AA")), "usage");
     assert_eq!(e.err(&raw("AA", "AA")), "usage");
+    // 32 zero bytes: well-formed, but not a PRF output.
+    assert_eq!(e.err(&raw("AA", &"A".repeat(43))), "usage");
 }
 
 #[test]
 fn raw_values_may_start_with_a_hyphen() {
     // base64url uses '-', so a random credential ID or PRF can start with one.
     let e = Env::new();
-    let prf = format!("-{}", "A".repeat(42));
+    let prf = "-AECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
     let created = e.ok(&[
         "create",
         "--account",
@@ -438,7 +467,7 @@ fn raw_values_may_start_with_a_hyphen() {
         "--credential-id",
         "-AAA",
         "--prf",
-        &prf,
+        prf,
     ]);
     assert_eq!(created["epoch"], 0);
 }

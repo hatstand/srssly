@@ -10,7 +10,8 @@ import hmac
 
 from cryptography.hazmat.primitives import serialization as s
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 H = lambda k, m: hmac.new(k, m, hashlib.sha256).digest()
 
@@ -43,12 +44,12 @@ results["prf"] = H(bytes([9] * 32), results["ctap_salt"])
 SUITE = b"KEM" + (0x20).to_bytes(2, "big")
 
 
-def labeled_extract(salt, label, ikm):
-    return H(salt or bytes(32), b"HPKE-v1" + SUITE + label + ikm)
+def labeled_extract(salt, label, ikm, suite=SUITE):
+    return H(salt or bytes(32), b"HPKE-v1" + suite + label + ikm)
 
 
-def labeled_expand(prk, label, info, length):
-    labeled_info = length.to_bytes(2, "big") + b"HPKE-v1" + SUITE + label + info
+def labeled_expand(prk, label, info, length, suite=SUITE):
+    labeled_info = length.to_bytes(2, "big") + b"HPKE-v1" + suite + label + info
     out, t, i = b"", b"", 1
     while len(out) < length:
         t = H(prk, t + labeled_info + bytes([i]))
@@ -59,7 +60,31 @@ def labeled_expand(prk, label, info, length):
 
 ikm = hkdf(b"srssly/v1/passkey-kem", results["prf"], b"x25519", 32)
 sk = labeled_expand(labeled_extract(b"", b"dkp_prk", ikm), b"sk", b"", 32)
-results["passkey_public"] = raw(X25519PrivateKey.from_private_bytes(sk).public_key())
+passkey_sk = X25519PrivateKey.from_private_bytes(sk)
+results["passkey_public"] = raw(passkey_sk.public_key())
+
+# RFC 9180 base-mode open (DHKEM X25519, HKDF-SHA256, AES-256-GCM) of the
+# wrapped secret pinned in wrap.rs: it must give back the test root secret.
+HPKE_SUITE = b"HPKE" + bytes([0, 0x20, 0, 1, 0, 2])
+enc = bytes.fromhex("e8f3de694a8a6baf4c8f79d68597e65ff59dcb94b3745d59b168f1dca8058945")
+ciphertext = bytes.fromhex(
+    "8f8c21b665f61dd66c8a9be940cc1725be895afb1396bcdbef7180b46bd501a1032294190c7c185aa8d17468ed94e81d"
+)
+dh = passkey_sk.exchange(X25519PublicKey.from_public_bytes(enc))
+shared = labeled_expand(
+    labeled_extract(b"", b"eae_prk", dh), b"shared_secret", enc + results["passkey_public"], 32
+)
+info = b"srssly/v1/root-wrap"
+context = (
+    b"\x00"
+    + labeled_extract(b"", b"psk_id_hash", b"", HPKE_SUITE)
+    + labeled_extract(b"", b"info_hash", info, HPKE_SUITE)
+)
+secret = labeled_extract(shared, b"secret", b"", HPKE_SUITE)
+key = labeled_expand(secret, b"key", context, 32, HPKE_SUITE)
+nonce = labeled_expand(secret, b"base_nonce", context, 12, HPKE_SUITE)
+aad = b"srssly/v1/root-wrap/" + acct + (0).to_bytes(4, "big") + hashlib.sha256(b"cred").digest()
+results["unwrapped_root"] = AESGCM(key).decrypt(nonce, ciphertext, aad)
 
 # The same values are pinned in the Rust tests.
 EXPECTED = {
@@ -68,6 +93,7 @@ EXPECTED = {
     "auth_public": "b73c2d802b74e5438e51c49cbab6873ba403e6a67ceea29abe902a4a72bd3172",
     "prf": "0763ce60a3fe189c114c48cf3a5ef43bbe48429e10c6384a67de5ead8a96e1f9",
     "passkey_public": "3819b8a928132364538f0874ebacc1d03b551b8e2d1c3c0af8163d0209babd3e",
+    "unwrapped_root": root.hex(),
     "ctap_salt": "09cfa2c104ea19b7a59f9472b2b6fd18194db1b560fa3bff1add23bfdd921a42",
 }
 

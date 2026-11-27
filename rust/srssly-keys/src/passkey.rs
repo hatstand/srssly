@@ -36,13 +36,22 @@ pub fn ctap_hmac_secret_salt(prf_input: &[u8]) -> [u8; 32] {
     h.finalize().into()
 }
 
-/// The 32-byte output of a passkey's PRF for [`PRF_INPUT`].
-#[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
+/// The 32-byte output of a passkey's PRF for [`PRF_INPUT`]. Equality is for
+/// tests only, since it isn't constant-time.
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct PrfOutput([u8; 32]);
 
 impl PrfOutput {
-    pub fn from_bytes(bytes: [u8; 32]) -> Self {
-        Self(bytes)
+    /// `None` if the bytes are obviously not random (fewer than 8 distinct
+    /// values, as for [`RootSecret::from_bytes`](crate::RootSecret::from_bytes)):
+    /// a broken authenticator or bridge that returns zeros must not unlock or
+    /// register anything.
+    /// Wipes `bytes`, like [`RootSecret::from_bytes`](crate::RootSecret::from_bytes).
+    pub fn from_bytes(bytes: &mut [u8; 32]) -> Option<Self> {
+        let prf = crate::keys::looks_random(bytes).then_some(Self(*bytes));
+        bytes.zeroize();
+        prf
     }
 
     /// Crate-private, like [`RootSecret`](crate::RootSecret)'s bytes: the PRF
@@ -130,8 +139,19 @@ impl PasskeyKeyPair {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// A valid test PRF output: the bytes `first, first + 1, ..., first + 31`.
+    pub(crate) fn test_prf(first: u8) -> PrfOutput {
+        PrfOutput::from_bytes(&mut std::array::from_fn(|i| first.wrapping_add(i as u8))).unwrap()
+    }
+
+    #[test]
+    fn rejects_obviously_non_random_prf_output() {
+        assert!(PrfOutput::from_bytes(&mut [0; 32]).is_none());
+        assert!(PrfOutput::from_bytes(&mut [7; 32]).is_none());
+    }
 
     #[test]
     fn ctap_salt_matches_webauthn_definition() {
@@ -143,8 +163,8 @@ mod tests {
 
     #[test]
     fn key_pair_is_deterministic_per_prf() {
-        let prf = PrfOutput::from_bytes([3; 32]);
-        let other = PrfOutput::from_bytes([4; 32]);
+        let prf = test_prf(3);
+        let other = test_prf(4);
         let public = |p| *PasskeyKeyPair::from_prf(p).public_key();
         assert_eq!(public(&prf), public(&prf));
         assert_ne!(public(&prf), public(&other));
@@ -176,9 +196,6 @@ mod tests {
 
     #[test]
     fn debug_hides_secrets() {
-        assert_eq!(
-            format!("{:?}", PrfOutput::from_bytes([1; 32])),
-            "PrfOutput(..)"
-        );
+        assert_eq!(format!("{:?}", test_prf(1)), "PrfOutput(..)");
     }
 }

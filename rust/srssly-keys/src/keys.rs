@@ -1,6 +1,6 @@
 use std::fmt;
 
-use ed25519_dalek::{SigningKey, VerifyingKey};
+use ed25519_dalek::{Signer as _, SigningKey, VerifyingKey};
 use hkdf::Hkdf;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::Sha256;
@@ -16,19 +16,25 @@ pub(crate) mod wrap;
 /// The account's root secret: 32 random bytes from which every other key derives.
 ///
 /// There is deliberately no public way to read the bytes back out, so they
-/// can't be logged or sent anywhere by accident.
-#[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
+/// can't be logged or sent anywhere by accident. Equality is for tests only:
+/// it isn't constant-time, and code should compare [`KeyCheck`]s instead.
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct RootSecret([u8; 32]);
 
 impl RootSecret {
     /// A new random root secret.
     pub fn generate() -> Self {
-        Self::from_bytes(random_bytes()).expect("system random number generator is broken")
+        Self::from_bytes(&mut random_bytes()).expect("system random number generator is broken")
     }
 
     /// `None` if the bytes are obviously not random (see [`looks_random`]).
-    pub fn from_bytes(bytes: [u8; 32]) -> Option<Self> {
-        looks_random(&bytes).then_some(Self(bytes))
+    /// Takes the bytes by reference and wipes them, so the caller's copy
+    /// doesn't linger on the stack.
+    pub fn from_bytes(bytes: &mut [u8; 32]) -> Option<Self> {
+        let secret = looks_random(bytes).then_some(Self(*bytes));
+        bytes.zeroize();
+        secret
     }
 
     /// Private: only this module and its children (which seal the secret) can
@@ -64,10 +70,12 @@ impl RootSecret {
 
     /// The keys derived from this secret for `account`.
     pub fn derive(&self, account: &AccountId) -> DerivedKeys {
-        let auth_seed: [u8; 32] = self.expand(account, b"auth-key");
+        let mut auth_seed: [u8; 32] = self.expand(account, b"auth-key");
+        let auth_key = AuthKey(SigningKey::from_bytes(&auth_seed));
+        auth_seed.zeroize();
         DerivedKeys {
             data_key: DataKey(self.expand(account, b"data-key")),
-            auth_key: SigningKey::from_bytes(&auth_seed),
+            auth_key,
         }
     }
 }
@@ -76,7 +84,7 @@ impl RootSecret {
 /// from one sample, but this rejects zeros, repeated bytes and short patterns
 /// (a broken RNG, a test value, the all-"abandon" recovery phrase), while 32
 /// random bytes fail it with probability about 10^-37.
-fn looks_random(bytes: &[u8; 32]) -> bool {
+pub(crate) fn looks_random(bytes: &[u8; 32]) -> bool {
     // A bitmap of seen values in one cache line, rather than a 256-entry table.
     let mut seen = [0u64; 4];
     for &b in bytes {
@@ -97,13 +105,35 @@ impl fmt::Debug for RootSecret {
 pub struct DerivedKeys {
     pub data_key: DataKey,
     /// Ed25519 key that authenticates this account to the relay.
-    pub auth_key: SigningKey,
+    pub auth_key: AuthKey,
 }
 
 impl DerivedKeys {
     /// The relay identifies the account's current key by this public key.
     pub fn auth_public_key(&self) -> AuthPublicKey {
-        AuthPublicKey(self.auth_key.verifying_key())
+        self.auth_key.public_key()
+    }
+}
+
+/// The Ed25519 private key that authenticates an account to the relay. It
+/// can sign, but like [`RootSecret`] its bytes can't be read, and it is wiped
+/// when dropped.
+pub struct AuthKey(SigningKey);
+
+impl AuthKey {
+    pub fn public_key(&self) -> AuthPublicKey {
+        AuthPublicKey(self.0.verifying_key())
+    }
+
+    /// An Ed25519 signature of `message`.
+    pub fn sign(&self, message: &[u8]) -> [u8; 64] {
+        self.0.sign(message).to_bytes()
+    }
+}
+
+impl fmt::Debug for AuthKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "AuthKey({:?})", self.public_key())
     }
 }
 
@@ -170,7 +200,7 @@ pub(crate) mod tests {
 
     /// A valid test secret: the bytes `first, first + 1, ..., first + 31`.
     pub(crate) fn test_root(first: u8) -> RootSecret {
-        RootSecret::from_bytes(std::array::from_fn(|i| first.wrapping_add(i as u8))).unwrap()
+        RootSecret::from_bytes(&mut std::array::from_fn(|i| first.wrapping_add(i as u8))).unwrap()
     }
 
     #[test]
@@ -195,7 +225,7 @@ pub(crate) mod tests {
         let b = root.derive(&account());
         assert_eq!(a.data_key.0, b.data_key.0);
         assert_eq!(a.auth_public_key(), b.auth_public_key());
-        assert_ne!(a.data_key.0, a.auth_key.to_bytes());
+        assert_ne!(a.data_key.0, a.auth_key.0.to_bytes());
         assert_ne!(&a.data_key.0[..16], root.key_check(&account()).as_bytes());
         let other = AccountId::from_bytes([8; 16]);
         assert_ne!(a.data_key.0, root.derive(&other).data_key.0);
@@ -208,14 +238,24 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn from_bytes_wipes_its_input() {
+        let mut bytes = std::array::from_fn(|i| i as u8);
+        assert!(RootSecret::from_bytes(&mut bytes).is_some());
+        assert_eq!(bytes, [0; 32]);
+        let mut weak = [1; 32];
+        assert!(RootSecret::from_bytes(&mut weak).is_none());
+        assert_eq!(weak, [0; 32]);
+    }
+
+    #[test]
     fn rejects_obviously_non_random_bytes() {
-        assert!(RootSecret::from_bytes([0; 32]).is_none());
-        assert!(RootSecret::from_bytes([0xff; 32]).is_none());
+        assert!(RootSecret::from_bytes(&mut [0; 32]).is_none());
+        assert!(RootSecret::from_bytes(&mut [0xff; 32]).is_none());
         let pattern = |n: u8| std::array::from_fn(|i| i as u8 % n);
-        assert!(RootSecret::from_bytes(pattern(7)).is_none());
-        assert!(RootSecret::from_bytes(pattern(8)).is_some());
+        assert!(RootSecret::from_bytes(&mut pattern(7)).is_none());
+        assert!(RootSecret::from_bytes(&mut pattern(8)).is_some());
         // Values in different 64-bit words of the bitmap all count.
-        assert!(RootSecret::from_bytes(std::array::from_fn(|i| (i as u8 % 8) * 32)).is_some());
+        assert!(RootSecret::from_bytes(&mut std::array::from_fn(|i| (i as u8 % 8) * 32)).is_some());
     }
 
     #[test]
@@ -237,6 +277,17 @@ pub(crate) mod tests {
         assert_eq!(format!("{root:?}"), "RootSecret(..)");
         let keys = root.derive(&account());
         assert_eq!(format!("{:?}", keys.data_key), "DataKey(..)");
+        let debug = format!("{:?}", keys.auth_key);
+        assert!(debug.starts_with("AuthKey(AuthPublicKey("), "{debug}");
+    }
+
+    #[test]
+    fn auth_key_signs_for_its_public_key() {
+        let keys = test_root(0).derive(&account());
+        let sig = ed25519_dalek::Signature::from_bytes(&keys.auth_key.sign(b"hi"));
+        let public = VerifyingKey::from_bytes(&keys.auth_public_key().to_bytes()).unwrap();
+        public.verify_strict(b"hi", &sig).unwrap();
+        assert!(public.verify_strict(b"ho", &sig).is_err());
     }
 
     /// Pins the derivation so other implementations (Swift, Kotlin, web) can

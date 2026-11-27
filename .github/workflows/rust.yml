@@ -2,10 +2,10 @@ name: Rust
 
 on:
   pull_request:
-    paths: ["rust/**", ".github/workflows/rust.yml"]
+    paths: ["rust/**", "rust-toolchain.toml", ".github/workflows/rust.yml"]
   push:
     branches: [main]
-    paths: ["rust/**", ".github/workflows/rust.yml"]
+    paths: ["rust/**", "rust-toolchain.toml", ".github/workflows/rust.yml"]
 
 concurrency:
   group: rust-${{ github.ref }}
@@ -22,9 +22,17 @@ jobs:
       - uses: actions/checkout@v4
       - run: rustup component add rustfmt clippy
       - run: cargo fmt --check
+      - run: cargo clippy --all-targets --all-features --locked -- -D warnings
       - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --all-features --locked
       - run: cargo test --locked
-      - run: cargo build --locked --no-default-features
+      - name: Check the app library has no test-only code
+        run: |
+          cargo build --locked --release -p srssly-keys-ffi --lib
+          if nm -C target/release/libsrssly_keys_ffi.a 2>/dev/null | grep -E 'SoftPasskey|RootSecret::export|PrfOutput::export|RecoveryKey::words'; then
+            echo "libsrssly_keys_ffi.a contains test-only or secret-export code" >&2
+            exit 1
+          fi
       - name: Generate the Swift bindings
         run: |
           cargo build --locked -p srssly-keys-ffi --lib

@@ -16,11 +16,13 @@ if [ -n "${CI_BUILD_NUMBER:-}" ]; then
 fi
 
 # The Rust key core (Packages/SrsslyKeys) is built from source. Xcode Cloud
-# has no Rust, so install a minimal toolchain first.
+# has no Rust, so install rustup first, then the toolchain rust-toolchain.toml
+# pins.
 if ! command -v rustup >/dev/null; then
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
     . "$HOME/.cargo/env"
 fi
+rustup toolchain install
 ./scripts/build-rust-ios.sh
 
 xcodegen generate

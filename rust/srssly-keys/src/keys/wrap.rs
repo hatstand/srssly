@@ -38,6 +38,9 @@ fn aad(account: &AccountId, epoch: u32, credential: &CredentialIdHash) -> Vec<u8
 }
 
 impl WrappedSecret {
+    /// A sealed 32-byte root secret plus the 16-byte AES-GCM tag.
+    pub const CIPHERTEXT_LEN: usize = 32 + 16;
+
     /// Seals `root` to the passkey whose public key is `public_key`.
     pub fn seal(
         root: &RootSecret,
@@ -85,10 +88,15 @@ impl WrappedSecret {
             &aad(account, epoch, credential),
         )
         .map_err(|_| Error::DecryptionFailed)?;
-        let bytes: Option<[u8; 32]> = plain.as_slice().try_into().ok();
+        let mut bytes = zeroize::Zeroizing::new([0u8; 32]);
+        let right_length = plain.len() == bytes.len();
+        if right_length {
+            bytes.copy_from_slice(&plain);
+        }
         zeroize::Zeroize::zeroize(&mut plain);
-        bytes
-            .and_then(RootSecret::from_bytes)
+        right_length
+            .then(|| RootSecret::from_bytes(&mut bytes))
+            .flatten()
             .ok_or(Error::Malformed("root secret"))
     }
 }
@@ -96,12 +104,13 @@ impl WrappedSecret {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::passkey::PrfOutput;
+    use crate::PrfAuthenticator as _;
+    use crate::passkey::tests::test_prf;
 
     fn setup() -> (RootSecret, PasskeyKeyPair, AccountId, CredentialIdHash) {
         (
             RootSecret::generate(),
-            PasskeyKeyPair::from_prf(&PrfOutput::from_bytes([5; 32])),
+            PasskeyKeyPair::from_prf(&test_prf(5)),
             AccountId::generate(),
             CredentialIdHash::of(b"cred"),
         )
@@ -111,6 +120,7 @@ mod tests {
     fn seal_then_open() {
         let (root, kp, account, cred) = setup();
         let w = WrappedSecret::seal(&root, kp.public_key(), &account, 0, &cred).unwrap();
+        assert_eq!(w.ciphertext.len(), WrappedSecret::CIPHERTEXT_LEN);
         assert_eq!(w.open(&kp, &account, 0, &cred).unwrap(), root);
         assert!(!w.ciphertext.windows(32).any(|c| c == root.as_bytes()));
     }
@@ -127,7 +137,7 @@ mod tests {
     fn wrong_passkey_is_rejected() {
         let (root, kp, account, cred) = setup();
         let w = WrappedSecret::seal(&root, kp.public_key(), &account, 0, &cred).unwrap();
-        let other = PasskeyKeyPair::from_prf(&PrfOutput::from_bytes([6; 32]));
+        let other = PasskeyKeyPair::from_prf(&test_prf(6));
         assert_eq!(w.open(&other, &account, 0, &cred), Err(Error::WrongPasskey));
     }
 
@@ -149,6 +159,41 @@ mod tests {
             Err(Error::DecryptionFailed)
         );
     }
+
+    /// A wrapped secret sealed once and pinned, so other implementations can
+    /// check they open it. `scripts/known_answers.py` opens the same bytes
+    /// with its own HPKE: root `test_root(0)`, account `[7; 16]`, epoch 0,
+    /// credential `"cred"`, sealed to the `SoftPasskey` with credRandom `[9; 32]`.
+    #[test]
+    fn known_wrapped_secret_opens() {
+        let prf = crate::SoftPasskey::from_parts(b"cred".to_vec(), [9; 32])
+            .evaluate_prf(crate::PRF_INPUT)
+            .unwrap();
+        let hex = |s: &str| -> Vec<u8> {
+            (0..s.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+                .collect()
+        };
+        let kp = PasskeyKeyPair::from_prf(&prf);
+        let w = WrappedSecret {
+            public_key: *kp.public_key(),
+            encapped_key: hex(KAT_ENC).try_into().unwrap(),
+            ciphertext: hex(KAT_CIPHERTEXT),
+        };
+        let root = w
+            .open(
+                &kp,
+                &crate::keys::tests::account(),
+                0,
+                &CredentialIdHash::of(b"cred"),
+            )
+            .unwrap();
+        assert_eq!(root, crate::keys::tests::test_root(0));
+    }
+
+    const KAT_ENC: &str = "e8f3de694a8a6baf4c8f79d68597e65ff59dcb94b3745d59b168f1dca8058945";
+    const KAT_CIPHERTEXT: &str = "8f8c21b665f61dd66c8a9be940cc1725be895afb1396bcdbef7180b46bd501a1032294190c7c185aa8d17468ed94e81d";
 
     #[test]
     fn tampering_is_detected() {

@@ -1,0 +1,6 @@
+# The Rust toolchain for rust/, pinned so CI, Xcode Cloud and local builds of
+# the key core use the same compiler. Bump it deliberately.
+[toolchain]
+channel = "1.97.0"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
