@@ -48,7 +48,8 @@ enum Command {
         #[arg(long, default_value = "passkey")]
         label: String,
     },
-    /// Unlock the root secret with a passkey.
+    /// Unlock the root secret with a passkey. If the passkey was bound before
+    /// the last rotation, rebind it and update the account file.
     Unlock {
         #[arg(long)]
         account: PathBuf,
@@ -78,6 +79,9 @@ enum Command {
     RemovePasskey {
         #[arg(long)]
         account: PathBuf,
+        /// An unlocked device, to re-sign the record.
+        #[arg(long)]
+        device: PathBuf,
         #[arg(long, conflicts_with = "passkey", required_unless_present = "passkey")]
         credential_id_hash: Option<String>,
         /// A software passkey file.
@@ -321,13 +325,18 @@ fn run(cli: Cli) -> Result<Value, CliError> {
             passkey,
             device_out,
         } => {
-            let keys = read_account(&account)?;
+            let mut keys = read_account(&account)?;
             let (id, prf) = passkey.resolve()?;
-            let root = keys.unlock_with_prf(&id, &prf)?;
+            let (root, rebound) = keys.unlock_and_rebind_with_prf(&id, &prf)?;
             if let Some(path) = device_out {
                 write_json(&path, &Device::new(&keys, &root))?;
             }
-            Ok(summary(&keys))
+            if rebound {
+                write_account(&account, &keys)?;
+            }
+            let mut out = summary(&keys);
+            out["rebound"] = json!(rebound);
+            Ok(out)
         }
         Command::AddPasskey {
             account,
@@ -361,10 +370,12 @@ fn run(cli: Cli) -> Result<Value, CliError> {
         }
         Command::RemovePasskey {
             account,
+            device,
             credential_id_hash,
             passkey,
         } => {
             let mut keys = read_account(&account)?;
+            let root = read_json::<Device>(&device)?.root()?;
             let hash = match (credential_id_hash, passkey) {
                 (Some(h), _) => CredentialIdHash::from_base64url(&h)?,
                 (None, Some(path)) => {
@@ -372,7 +383,7 @@ fn run(cli: Cli) -> Result<Value, CliError> {
                 }
                 (None, None) => unreachable!("clap requires one"),
             };
-            let removed = keys.remove_passkey(&hash)?;
+            let removed = keys.remove_passkey(&root, &hash)?;
             write_account(&account, &keys)?;
             let mut out = summary(&keys);
             out["removed"] = json!(removed.label);

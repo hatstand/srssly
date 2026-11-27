@@ -194,7 +194,9 @@ fn create_then_unlock() {
         "--device-out",
         "dev2.json",
     ]);
-    assert_eq!(unlocked, created);
+    let mut expected = created.clone();
+    expected["rebound"] = false.into();
+    assert_eq!(unlocked, expected);
     let dev = std::fs::read_to_string(e.path("dev.json")).unwrap();
     assert_eq!(dev, std::fs::read_to_string(e.path("dev2.json")).unwrap());
 
@@ -275,6 +277,8 @@ fn manage_passkeys() {
         "remove-passkey",
         "--account",
         "acct.json",
+        "--device",
+        "dev.json",
         "--credential-id-hash",
         hash,
     ]);
@@ -287,6 +291,8 @@ fn manage_passkeys() {
         "remove-passkey",
         "--account",
         "acct.json",
+        "--device",
+        "dev.json",
         "--passkey",
         "b.json",
     ]);
@@ -295,6 +301,8 @@ fn manage_passkeys() {
             "remove-passkey",
             "--account",
             "acct.json",
+            "--device",
+            "dev.json",
             "--passkey",
             "a.json"
         ]),
@@ -397,11 +405,15 @@ fn recovery_key_and_rotation() {
     assert_eq!(rotated["account_id"], created["account_id"]);
     assert_ne!(rotated["auth_public_key"], created["auth_public_key"]);
     e.ok(&["verify", "--account", "acct.json", "--device", "dev.json"]);
+    // The first unlock after a rotation rebinds the passkey; the next doesn't.
     for pk in ["a.json", "b.json"] {
+        let unlock = ["unlock", "--account", "acct.json", "--passkey", pk];
+        let first = e.ok(&unlock);
         assert_eq!(
-            e.ok(&["unlock", "--account", "acct.json", "--passkey", pk])["epoch"],
-            1
+            (&first["epoch"], &first["rebound"]),
+            (&1.into(), &true.into())
         );
+        assert_eq!(e.ok(&unlock)["rebound"], false);
     }
     let stale = [
         "verify",

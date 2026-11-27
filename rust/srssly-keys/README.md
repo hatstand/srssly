@@ -31,6 +31,9 @@ see: public keys, a key check and sealed secrets.
 | Wrapped secret | The root secret sealed with HPKE base mode (DHKEM X25519, HKDF-SHA256, AES-256-GCM), `info="srssly/v1/root-wrap"`, associated data = `"srssly/v1/root-wrap/" ‖ account ID ‖ epoch (u32 BE) ‖ SHA-256(credential ID)`. One per passkey. |
 | Derived keys | `HKDF-SHA256(salt="srssly/v1/root/" ‖ account ID, ikm=root)`: `key-check` (16 bytes, public), `data-key` (AES-256-GCM for records), `auth-key` (Ed25519 seed for relay authentication). |
 | Recovery key | The root secret as 24 BIP39 English words. Optional. |
+| Record signature | Ed25519 by the current auth key over every field of the record, each length-prefixed (u32 BE) after the label `srssly/v2/record`. |
+| Epoch link | One per epoch: key check and auth public key. Each after the first is signed by the previous epoch's auth key over `srssly/v2/link` ‖ account ‖ epoch ‖ key check ‖ auth public key. |
+| Passkey binding | `HMAC-SHA256(HKDF-SHA256(salt="srssly/v1/passkey-kem", ikm=PRF output, info="binding-mac"), "srssly/v2/binding" ‖ account ‖ epoch ‖ key check ‖ auth public key ‖ credential hash ‖ passkey public key)`, at the epoch the passkey was bound. |
 
 Because each passkey is represented by a public key, the root secret can be
 sealed to every passkey without asking each one again. That is what makes
@@ -44,6 +47,28 @@ these work:
   passkey. Old devices, wrapped copies and recovery keys stop working. (Synced
   records then need re-encrypting under the new data key; that's for the sync
   layer.)
+
+## Why the relay can't forge the record
+
+The relay can rewrite the record it stores, so the record authenticates
+itself (format version 2):
+
+- **Changes need the root.** Every change is signed with the current auth
+  key. `add_passkey`, `remove_passkey` and `rotate` check that signature
+  with the key derived from the caller's root, so an entry the relay slips
+  in never receives a rotated secret.
+- **A new device trusts its passkey, not the relay.** Anyone can seal a
+  secret to a stored public key, so unlocking first checks the passkey's
+  binding, which only that passkey's PRF can make. The binding vouches for
+  its epoch, the signed epoch links for each rotation after it, and the
+  record signature for the rest.
+- **Lazy rebind.** A binding from before a rotation trusts every link since,
+  and a rotated-away root could fork that chain together with the relay.
+  `unlock_and_rebind` moves the passkey's binding to the current epoch the
+  first time it unlocks after a rotation; store the record when it says so.
+- **Not covered:** a relay can serve an older, validly signed record. The
+  `revision` goes up on every change so devices can refuse one older than
+  they have seen; a brand-new device can't tell.
 
 ## Authenticators
 
@@ -76,7 +101,7 @@ srssly-keys unlock --account acct.json --passkey b.json --device-out dev2.json
 srssly-keys recovery-key --device dev.json
 srssly-keys recover --account acct.json --words "…24 words…" --device-out dev3.json
 srssly-keys rotate --account acct.json --device dev.json
-srssly-keys remove-passkey --account acct.json --passkey b.json
+srssly-keys remove-passkey --account acct.json --device dev.json --passkey b.json
 srssly-keys verify --account acct.json --device dev.json
 # A real authenticator: pass what the browser's PRF extension returned.
 srssly-keys unlock --account acct.json --credential-id <base64url> --prf <base64url>
@@ -87,5 +112,5 @@ Keychain and holds the root secret in plain text, so it is for testing only.
 
 Error codes: `wrong_passkey`, `unknown_passkey`, `duplicate_passkey`,
 `last_passkey`, `decryption_failed`, `wrong_root_secret`,
-`invalid_recovery_key`, `unsupported_version`, `authenticator`, `malformed`,
+`invalid_recovery_key`, `unsupported_version`, `authenticator`, `tampered`, `malformed`,
 `io`, `usage`.

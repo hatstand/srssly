@@ -86,6 +86,38 @@ nonce = labeled_expand(secret, b"base_nonce", context, 12, HPKE_SUITE)
 aad = b"srssly/v1/root-wrap/" + acct + (0).to_bytes(4, "big") + hashlib.sha256(b"cred").digest()
 results["unwrapped_root"] = AESGCM(key).decrypt(nonce, ciphertext, aad)
 
+# Key record authentication (account.rs): the passkey binding at epoch 0 and
+# the epoch-1 link signed by epoch 0's auth key. Fields are length-prefixed.
+def transcript(label, *fields):
+    return b"".join(len(f).to_bytes(4, "big") + f for f in (label, *fields))
+
+
+def epoch_values(root):
+    seed = hkdf(salt, root, b"auth-key", 32)
+    return hkdf(salt, root, b"key-check", 16), seed
+
+
+key_check0, seed0 = epoch_values(root)
+auth0 = Ed25519PrivateKey.from_private_bytes(seed0)
+binding_key = hkdf(b"srssly/v1/passkey-kem", results["prf"], b"binding-mac", 32)
+results["binding"] = H(
+    binding_key,
+    transcript(
+        b"srssly/v2/binding",
+        acct,
+        (0).to_bytes(4, "big"),
+        key_check0,
+        raw(auth0.public_key()),
+        hashlib.sha256(b"cred").digest(),
+        results["passkey_public"],
+    ),
+)
+key_check1, seed1 = epoch_values(bytes(range(1, 33)))
+auth1_public = raw(Ed25519PrivateKey.from_private_bytes(seed1).public_key())
+results["link_signature"] = auth0.sign(
+    transcript(b"srssly/v2/link", acct, (1).to_bytes(4, "big"), key_check1, auth1_public)
+)
+
 # The same values are pinned in the Rust tests.
 EXPECTED = {
     "key_check": "7d745637d079f47074bfa7e55b88b32e",
@@ -94,6 +126,8 @@ EXPECTED = {
     "prf": "0763ce60a3fe189c114c48cf3a5ef43bbe48429e10c6384a67de5ead8a96e1f9",
     "passkey_public": "3819b8a928132364538f0874ebacc1d03b551b8e2d1c3c0af8163d0209babd3e",
     "unwrapped_root": root.hex(),
+    "binding": "b2b55fb8363fee8da86bf171176e45d7442564ecb3f8f1a6d3dd263836e2f41e",
+    "link_signature": "22262c84fd317a1fed3c402194add22e402d09886751b98d25a6b38f632fac1d5d0b8cc08efbe06f124414040989a9f8c6af5220d32ff7b295d9cc08e4d00506",
     "ctap_salt": "09cfa2c104ea19b7a59f9472b2b6fd18194db1b560fa3bff1add23bfdd921a42",
 }
 
