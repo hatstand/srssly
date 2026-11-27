@@ -906,6 +906,48 @@ mod tests {
         assert_eq!(keys.unlock_and_rebind(&a).unwrap(), (root, false));
     }
 
+    /// Pins the binding MAC and the link signature byte for byte; the same
+    /// values come from the independent Python in `scripts/known_answers.py`.
+    #[test]
+    fn binding_and_link_known_answers() {
+        use crate::keys::tests::{account, assert_hex, test_root};
+        let link = |root: &RootSecret, epoch| EpochLink {
+            epoch,
+            key_check: root.key_check(&account()),
+            auth_public_key: root.derive(&account()).auth_public_key(),
+            signature: Vec::new(),
+        };
+        let pk = SoftPasskey::from_parts(b"cred".to_vec(), [9; 32]);
+        let prf = pk.evaluate_prf(PRF_INPUT).unwrap();
+        let info = PasskeyInfo {
+            credential_id_hash: CredentialIdHash::of(b"cred"),
+            label: String::new(),
+            wrapped: WrappedSecret {
+                public_key: *PasskeyKeyPair::from_prf(&prf).public_key(),
+                encapped_key: [0; 32],
+                ciphertext: Vec::new(),
+            },
+            binding: Binding {
+                epoch: 0,
+                mac: [0; 32],
+            },
+        };
+        let message = binding_bytes(&account(), &link(&test_root(0), 0), &info);
+        let mac = binding_mac(&prf).chain_update(message.bytes()).finalize();
+        assert_hex(
+            "binding",
+            &mac.into_bytes(),
+            "b2b55fb8363fee8da86bf171176e45d7442564ecb3f8f1a6d3dd263836e2f41e",
+        );
+        let next = link(&test_root(1), 1).signed_bytes(&account());
+        let signature = test_root(0).derive(&account()).auth_key.sign(next.bytes());
+        assert_hex(
+            "link_signature",
+            &signature,
+            "22262c84fd317a1fed3c402194add22e402d09886751b98d25a6b38f632fac1d5d0b8cc08efbe06f124414040989a9f8c6af5220d32ff7b295d9cc08e4d00506",
+        );
+    }
+
     #[test]
     fn every_change_bumps_the_revision() {
         let (mut keys, root) = AccountKeys::create(&SoftPasskey::generate(), "a").unwrap();
