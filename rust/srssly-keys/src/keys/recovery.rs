@@ -20,16 +20,17 @@ impl RecoveryKey {
     /// Rejects phrases whose secret is obviously not random, such as
     /// "abandon abandon ... art".
     pub fn parse(words: &str) -> Result<Self> {
-        // BIP39 English words are ASCII. Refusing anything else first means
-        // lowercasing can't lengthen the phrase, so the buffer sized up front
-        // never reallocates and no stray copy of the phrase is left.
-        if !words.is_ascii() {
-            return Err(Error::InvalidRecoveryKey(
-                "not an English BIP39 phrase".into(),
-            ));
-        }
+        // Any Unicode whitespace separates words (a pasted phrase can carry
+        // non-breaking spaces), but BIP39 English words are ASCII. Refusing
+        // other words means lowercasing can't lengthen one, so the buffer
+        // sized up front never reallocates and leaves no stray copy.
         let mut normalized = Zeroizing::new(String::with_capacity(words.len()));
         for word in words.split_whitespace() {
+            if !word.is_ascii() {
+                return Err(Error::InvalidRecoveryKey(
+                    "not an English BIP39 phrase".into(),
+                ));
+            }
             if !normalized.is_empty() {
                 normalized.push(' ');
             }
@@ -101,7 +102,7 @@ mod tests {
         let words = RecoveryKey::from_root(&root)
             .words()
             .to_uppercase()
-            .replace(' ', "  \n");
+            .replace(' ', " \u{00a0}\n");
         assert_eq!(RecoveryKey::parse(&words).unwrap().root_secret(), root);
     }
 
