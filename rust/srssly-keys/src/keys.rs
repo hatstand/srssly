@@ -4,7 +4,7 @@ use ed25519_dalek::{Signer as _, SigningKey, VerifyingKey};
 use hkdf::Hkdf;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::Sha256;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::account::AccountId;
 use crate::transcript::Transcript;
@@ -53,12 +53,17 @@ impl RootSecret {
     }
 
     /// `HKDF-SHA256(salt = "srssly/v1/root/" || account, ikm = root)`.
-    pub(crate) fn expand<const N: usize>(&self, account: &AccountId, info: &[u8]) -> [u8; N] {
+    /// Wiped on drop, since most outputs are keys.
+    pub(crate) fn expand<const N: usize>(
+        &self,
+        account: &AccountId,
+        info: &[u8],
+    ) -> Zeroizing<[u8; N]> {
         let mut salt = b"srssly/v1/root/".to_vec();
         salt.extend_from_slice(account.as_bytes());
-        let mut out = [0u8; N];
+        let mut out = Zeroizing::new([0u8; N]);
         Hkdf::<Sha256>::new(Some(&salt), &self.0)
-            .expand(info, &mut out)
+            .expand(info, out.as_mut())
             .expect("HKDF output length is valid");
         out
     }
@@ -66,17 +71,19 @@ impl RootSecret {
     /// The public check value for this secret, which the relay stores so a
     /// client can tell whether a secret (say, from a recovery key) is current.
     pub fn key_check(&self, account: &AccountId) -> KeyCheck {
-        KeyCheck(self.expand(account, b"key-check"))
+        KeyCheck(*self.expand(account, b"key-check"))
     }
 
     /// The keys derived from this secret for `account`.
     pub fn derive(&self, account: &AccountId) -> DerivedKeys {
-        let mut auth_seed: [u8; 32] = self.expand(account, b"auth-key");
-        let auth_key = AuthKey(SigningKey::from_bytes(&auth_seed));
-        auth_seed.zeroize();
+        let auth_seed = self.expand(account, b"auth-key");
+        let mut data_key = DataKey([0; 32]);
+        data_key
+            .0
+            .copy_from_slice(self.expand::<32>(account, b"data-key").as_ref());
         DerivedKeys {
-            data_key: DataKey(self.expand(account, b"data-key")),
-            auth_key,
+            data_key,
+            auth_key: AuthKey(SigningKey::from_bytes(&auth_seed)),
         }
     }
 }
