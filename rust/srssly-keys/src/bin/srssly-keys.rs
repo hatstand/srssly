@@ -284,7 +284,7 @@ fn run(cli: Cli) -> Result<Value, CliError> {
             let prf = pk.evaluate_prf(&input)?;
             Ok(json!({
                 "credential_id": B64.encode(pk.credential_id()),
-                "prf": B64.encode(prf.as_bytes()),
+                "prf": B64.encode(prf.export().as_slice()),
             }))
         }
         Command::Create {
