@@ -49,6 +49,31 @@ pub struct PasskeyInfo {
     pub wrapped: WrappedSecret,
 }
 
+/// One epoch's public values. Every link after the first is signed by the
+/// previous epoch's auth key, so a device that trusts one epoch can follow
+/// the rotations after it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EpochLink {
+    pub epoch: u32,
+    pub key_check: KeyCheck,
+    pub auth_public_key: AuthPublicKey,
+    /// Ed25519 by the previous epoch's auth key; empty for the first link.
+    #[serde(with = "b64")]
+    pub signature: Vec<u8>,
+}
+
+impl EpochLink {
+    fn signed_bytes(&self, account: &AccountId) -> Transcript {
+        let mut t = Transcript::new(b"srssly/v2/link");
+        t.field(account.as_bytes())
+            .field(&self.epoch.to_be_bytes())
+            .field(self.key_check.as_bytes())
+            .field(&self.auth_public_key.to_bytes());
+        t
+    }
+}
+
 /// The key record the relay stores for an account. Everything in it is safe
 /// for the relay to see: public keys, a key check and sealed secrets.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,6 +90,8 @@ pub struct AccountKeys {
     pub key_check: KeyCheck,
     /// The current Ed25519 relay-authentication public key.
     pub auth_public_key: AuthPublicKey,
+    /// Every epoch from the first; the last is the current one.
+    pub epochs: Vec<EpochLink>,
     pub passkeys: Vec<PasskeyInfo>,
     /// Ed25519 signature of everything above by the current auth key, so only
     /// holders of the root secret can change the record.
@@ -95,13 +122,20 @@ impl AccountKeys {
     }
 
     fn empty(account_id: AccountId, epoch: u32, root: &RootSecret) -> Self {
+        let link = EpochLink {
+            epoch,
+            key_check: root.key_check(&account_id),
+            auth_public_key: root.derive(&account_id).auth_public_key(),
+            signature: Vec::new(),
+        };
         Self {
             version: FORMAT_VERSION,
             account_id,
             epoch,
             revision: 0,
-            key_check: root.key_check(&account_id),
-            auth_public_key: root.derive(&account_id).auth_public_key(),
+            key_check: link.key_check,
+            auth_public_key: link.auth_public_key,
+            epochs: vec![link],
             passkeys: Vec::new(),
             signature: [0; 64],
         }
@@ -116,7 +150,14 @@ impl AccountKeys {
             .field(&self.revision.to_be_bytes())
             .field(self.key_check.as_bytes())
             .field(&self.auth_public_key.to_bytes())
-            .field(&(self.passkeys.len() as u32).to_be_bytes());
+            .field(&(self.epochs.len() as u32).to_be_bytes());
+        for link in &self.epochs {
+            t.field(&link.epoch.to_be_bytes())
+                .field(link.key_check.as_bytes())
+                .field(&link.auth_public_key.to_bytes())
+                .field(&link.signature);
+        }
+        t.field(&(self.passkeys.len() as u32).to_be_bytes());
         for p in &self.passkeys {
             t.field(p.credential_id_hash.as_bytes())
                 .field(p.label.as_bytes())
@@ -265,6 +306,14 @@ impl AccountKeys {
         let epoch = self.epoch.checked_add(1).ok_or(Error::Malformed("epoch"))?;
         let mut next = Self::empty(self.account_id, epoch, &root);
         next.revision = self.next_revision()?;
+        // The old auth key vouches for the new epoch, extending the chain.
+        let mut link = next.epochs.pop().expect("a new record has one link");
+        let old_key = current.derive(&self.account_id).auth_key;
+        link.signature = old_key
+            .sign(link.signed_bytes(&self.account_id).bytes())
+            .to_vec();
+        next.epochs = self.epochs.clone();
+        next.epochs.push(link);
         for p in &self.passkeys {
             let wrapped = WrappedSecret::seal(
                 &root,
@@ -315,6 +364,7 @@ impl AccountKeys {
     /// Checks what serde can't: at least one passkey, no credential twice,
     /// and every wrapped secret the length a sealed root secret has.
     fn validate(&self) -> Result<()> {
+        self.verify_chain()?;
         if self.passkeys.is_empty() {
             return Err(Error::Malformed("no passkeys"));
         }
@@ -328,6 +378,35 @@ impl AccountKeys {
             if p.wrapped.ciphertext.len() != WrappedSecret::CIPHERTEXT_LEN {
                 return Err(Error::Malformed("wrapped secret"));
             }
+        }
+        Ok(())
+    }
+
+    /// Checks the epoch chain: consecutive epochs, each link signed by the
+    /// one before, ending at the record's current epoch and keys.
+    fn verify_chain(&self) -> Result<()> {
+        let (first, rest) = self
+            .epochs
+            .split_first()
+            .ok_or(Error::Malformed("epochs"))?;
+        let last = self.epochs.last().expect("not empty");
+        if !first.signature.is_empty()
+            || (last.epoch, last.key_check, last.auth_public_key)
+                != (self.epoch, self.key_check, self.auth_public_key)
+        {
+            return Err(Error::Malformed("epochs"));
+        }
+        let mut previous = first;
+        for link in rest {
+            let signature: &[u8; 64] = (link.signature.as_slice().try_into())
+                .map_err(|_| Error::Malformed("epoch signature"))?;
+            let signed = link.signed_bytes(&self.account_id);
+            if Some(link.epoch) != previous.epoch.checked_add(1)
+                || !previous.auth_public_key.verify(signed.bytes(), signature)
+            {
+                return Err(Error::Tampered);
+            }
+            previous = link;
         }
         Ok(())
     }
@@ -414,20 +493,12 @@ mod tests {
             &credential_id_hash,
         )
         .unwrap();
-        let mut keys = AccountKeys {
-            version: FORMAT_VERSION,
-            account_id,
-            epoch: 0,
-            revision: 0,
-            key_check: root.key_check(&account_id),
-            auth_public_key: root.derive(&account_id).auth_public_key(),
-            passkeys: vec![PasskeyInfo {
-                credential_id_hash,
-                label: "laptop".into(),
-                wrapped,
-            }],
-            signature: [0; 64],
-        };
+        let mut keys = AccountKeys::empty(account_id, 0, root);
+        keys.passkeys = vec![PasskeyInfo {
+            credential_id_hash,
+            label: "laptop".into(),
+            wrapped,
+        }];
         keys.sign(root);
         keys
     }
@@ -642,6 +713,34 @@ mod tests {
         assert_eq!(forged.unlock(&relay), Err(Error::Tampered));
         keys.passkeys[0].label = "renamed".into();
         assert_eq!(keys.rotate(&root), Err(Error::Tampered));
+    }
+
+    #[test]
+    fn rotation_extends_a_signed_epoch_chain() {
+        let (mut keys, root) = AccountKeys::create(&SoftPasskey::generate(), "a").unwrap();
+        let root = keys.rotate(&root).unwrap();
+        keys.rotate(&root).unwrap();
+        let epochs: Vec<_> = keys.epochs.iter().map(|l| l.epoch).collect();
+        assert_eq!(epochs, [0, 1, 2]);
+        assert_eq!(AccountKeys::from_json(&keys.to_json()).unwrap(), keys);
+
+        // A link the relay forged, or one it dropped, breaks the chain.
+        let mut forged = keys.clone();
+        forged.epochs[2].key_check = forged.epochs[1].key_check;
+        let parse = |k: &AccountKeys| AccountKeys::from_json(&k.to_json());
+        assert!(matches!(
+            parse(&forged),
+            Err(Error::Tampered | Error::Malformed(_))
+        ));
+        forged.epochs[2] = keys.epochs[2].clone();
+        forged.epochs[2].signature[0] ^= 1;
+        assert_eq!(parse(&forged), Err(Error::Tampered));
+        let mut gap = keys.clone();
+        gap.epochs.remove(1);
+        assert_eq!(parse(&gap), Err(Error::Tampered));
+        let mut unsigned_first = keys.clone();
+        unsigned_first.epochs.remove(0);
+        assert_eq!(parse(&unsigned_first), Err(Error::Malformed("epochs")));
     }
 
     #[test]
