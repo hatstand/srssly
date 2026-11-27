@@ -3,7 +3,11 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::keys::{AuthPublicKey, KeyCheck, RootSecret};
-use crate::passkey::{CredentialIdHash, PRF_INPUT, PasskeyKeyPair, PrfAuthenticator, PrfOutput};
+use hmac::Mac as _;
+
+use crate::passkey::{
+    CredentialIdHash, PRF_INPUT, PasskeyKeyPair, PrfAuthenticator, PrfOutput, binding_mac,
+};
 use crate::recovery::RecoveryKey;
 use crate::transcript::Transcript;
 use crate::wrap::WrappedSecret;
@@ -39,6 +43,17 @@ impl fmt::Debug for AccountId {
     }
 }
 
+/// A passkey's MAC over one epoch's public values (see [`EpochLink`]), made
+/// with a key derived from its PRF output. Only that passkey can make or
+/// check it, so unlocking with it trusts the record from that epoch on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Binding {
+    pub epoch: u32,
+    #[serde(with = "b64")]
+    pub mac: [u8; 32],
+}
+
 /// One registered passkey and the root secret sealed to it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -47,6 +62,7 @@ pub struct PasskeyInfo {
     /// A name the user recognises, such as "iPhone (iCloud Keychain)" or "YubiKey 5C".
     pub label: String,
     pub wrapped: WrappedSecret,
+    pub binding: Binding,
 }
 
 /// One epoch's public values. Every link after the first is signed by the
@@ -72,6 +88,19 @@ impl EpochLink {
             .field(&self.auth_public_key.to_bytes());
         t
     }
+}
+
+/// What a passkey's binding covers: `link`'s values, the passkey's credential
+/// hash and its public key.
+fn binding_bytes(account: &AccountId, link: &EpochLink, p: &PasskeyInfo) -> Transcript {
+    let mut t = Transcript::new(b"srssly/v2/binding");
+    t.field(account.as_bytes())
+        .field(&link.epoch.to_be_bytes())
+        .field(link.key_check.as_bytes())
+        .field(&link.auth_public_key.to_bytes())
+        .field(p.credential_id_hash.as_bytes())
+        .field(&p.wrapped.public_key);
+    t
 }
 
 /// The key record the relay stores for an account. Everything in it is safe
@@ -163,7 +192,9 @@ impl AccountKeys {
                 .field(p.label.as_bytes())
                 .field(&p.wrapped.public_key)
                 .field(&p.wrapped.encapped_key)
-                .field(&p.wrapped.ciphertext);
+                .field(&p.wrapped.ciphertext)
+                .field(&p.binding.epoch.to_be_bytes())
+                .field(&p.binding.mac);
         }
         t
     }
@@ -229,11 +260,23 @@ impl AccountKeys {
             &credential_id_hash,
         )?;
         self.revision = self.next_revision()?;
-        self.passkeys.push(PasskeyInfo {
+        let mut info = PasskeyInfo {
             credential_id_hash,
             label: label.to_owned(),
             wrapped,
-        });
+            binding: Binding {
+                epoch: self.epoch,
+                mac: [0; 32],
+            },
+        };
+        let link = self.epochs.last().expect("verified chain");
+        let message = binding_bytes(&self.account_id, link, &info);
+        info.binding.mac = binding_mac(prf)
+            .chain_update(message.bytes())
+            .finalize()
+            .into_bytes()
+            .into();
+        self.passkeys.push(info);
         self.sign(root);
         Ok(())
     }
@@ -258,6 +301,18 @@ impl AccountKeys {
             self.epoch,
             &hash,
         )?;
+        // The relay can seal a root of its own to the passkey's public key,
+        // so trust nothing until the passkey's own binding checks out: it
+        // vouches for its epoch, the chain for every epoch after that, and
+        // the current epoch for the root and the record signature.
+        let link = self.epochs.iter().find(|l| l.epoch == info.binding.epoch);
+        let link = link.ok_or(Error::Tampered)?;
+        let message = binding_bytes(&self.account_id, link, info);
+        binding_mac(prf)
+            .chain_update(message.bytes())
+            .verify_slice(&info.binding.mac)
+            .map_err(|_| Error::Tampered)?;
+        self.verify_chain()?;
         self.verify_signed(&root)?;
         Ok(root)
     }
@@ -498,6 +553,10 @@ mod tests {
             credential_id_hash,
             label: "laptop".into(),
             wrapped,
+            binding: Binding {
+                epoch: 0,
+                mac: [0; 32],
+            },
         }];
         keys.sign(root);
         keys
@@ -706,6 +765,7 @@ mod tests {
             credential_id_hash: hash,
             label: "relay".into(),
             wrapped: wrapped.unwrap(),
+            binding: keys.passkeys[0].binding,
         });
         assert_eq!(forged.clone().rotate(&root), Err(Error::Tampered));
         let other = SoftPasskey::generate();
@@ -741,6 +801,52 @@ mod tests {
         let mut unsigned_first = keys.clone();
         unsigned_first.epochs.remove(0);
         assert_eq!(parse(&unsigned_first), Err(Error::Malformed("epochs")));
+    }
+
+    /// Review finding 1: a relay that seals a root of its own to the stored
+    /// public keys, and signs a record to match, can't fool a new device.
+    #[test]
+    fn substituted_root_is_refused_at_unlock() {
+        let a = SoftPasskey::generate();
+        let (real, _) = AccountKeys::create(&a, "a").unwrap();
+        let relay_root = RootSecret::generate();
+        let mut forged = AccountKeys::empty(real.account_id, 0, &relay_root);
+        let p = &real.passkeys[0];
+        let wrapped = WrappedSecret::seal(
+            &relay_root,
+            &p.wrapped.public_key,
+            &real.account_id,
+            0,
+            &p.credential_id_hash,
+        );
+        forged.passkeys.push(PasskeyInfo {
+            wrapped: wrapped.unwrap(),
+            ..p.clone()
+        });
+        forged.sign(&relay_root);
+        assert_eq!(forged.unlock(&a), Err(Error::Tampered));
+        // Same with a binding the relay made up, or one pointing at no epoch.
+        forged.passkeys[0].binding.mac = [1; 32];
+        forged.sign(&relay_root);
+        assert_eq!(forged.unlock(&a), Err(Error::Tampered));
+        forged.passkeys[0].binding = real.passkeys[0].binding;
+        forged.passkeys[0].binding.epoch = 5;
+        forged.sign(&relay_root);
+        assert_eq!(forged.unlock(&a), Err(Error::Tampered));
+    }
+
+    #[test]
+    fn bindings_from_older_epochs_still_unlock() {
+        let a = SoftPasskey::generate();
+        let (mut keys, root) = AccountKeys::create(&a, "a").unwrap();
+        let root = keys.rotate(&root).unwrap();
+        let b = SoftPasskey::generate();
+        keys.add_passkey(&root, &b, "b").unwrap();
+        let root = keys.rotate(&root).unwrap();
+        let bound: Vec<_> = keys.passkeys.iter().map(|p| p.binding.epoch).collect();
+        assert_eq!(bound, [0, 1]);
+        assert_eq!(keys.unlock(&a).unwrap(), root);
+        assert_eq!(keys.unlock(&b).unwrap(), root);
     }
 
     #[test]

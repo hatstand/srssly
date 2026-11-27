@@ -1,6 +1,7 @@
 use std::fmt;
 
 use hkdf::Hkdf;
+use hmac::{Hmac, KeyInit};
 use hpke::Kem as _;
 use hpke::Serializable as _;
 use hpke::kem::X25519HkdfSha256;
@@ -109,6 +110,18 @@ impl CredentialIdHash {
             bytes.map_err(|_| Error::Malformed("credential ID hash"))?,
         ))
     }
+}
+
+/// HMAC-SHA-256 keyed by `HKDF-SHA256(salt = "srssly/v1/passkey-kem", ikm =
+/// PRF output, info = "binding-mac")`, a key only this passkey can produce.
+/// A passkey's binding in the key record is this MAC over the epoch's public
+/// values, so a new device can tell the record wasn't made up by the relay.
+pub(crate) fn binding_mac(prf: &PrfOutput) -> Hmac<Sha256> {
+    let mut key = zeroize::Zeroizing::new([0u8; 32]);
+    Hkdf::<Sha256>::new(Some(b"srssly/v1/passkey-kem"), prf.as_bytes())
+        .expand(b"binding-mac", key.as_mut())
+        .expect("HKDF output length is valid");
+    <Hmac<Sha256> as KeyInit>::new_from_slice(key.as_ref()).expect("HMAC accepts any key length")
 }
 
 /// The X25519 key pair a passkey's PRF output stands for. Its public key is
