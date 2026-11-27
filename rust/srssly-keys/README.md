@@ -45,9 +45,15 @@ these work:
 - **Removal.** Deletes that passkey's wrapped copy. It can't undo a device
   that already unlocked the secret; rotation does that.
 - **Rotation.** A new root secret and epoch, re-sealed to every registered
-  passkey. Old devices, wrapped copies and recovery keys stop working. (Synced
-  records then need re-encrypting under the new data key; that's for the sync
-  layer.)
+  passkey. Devices holding only the old root, old wrapped copies and the old
+  recovery key stop working, so show a new recovery key after every
+  rotation. (Synced records then need re-encrypting under the new data key;
+  that's for the sync layer.)
+- **Recovering from a compromised device.** Rotation re-seals to the same
+  passkey public keys, so anything that kept a passkey's PRF output opens
+  the new root too; with a synced passkey, that is every device it reached.
+  Call `remove_and_rotate` with every passkey the device used, so they never
+  receive the new root, then register fresh credentials.
 
 ## Why the relay can't forge the record
 
