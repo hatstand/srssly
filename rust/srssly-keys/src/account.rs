@@ -40,22 +40,26 @@ impl fmt::Debug for AccountId {
 
 /// One registered passkey and the root secret sealed to it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PasskeyInfo {
     pub credential_id_hash: CredentialIdHash,
     /// A name the user recognises, such as "iPhone (iCloud Keychain)" or "YubiKey 5C".
     pub label: String,
-    #[serde(flatten)]
     pub wrapped: WrappedSecret,
 }
 
 /// The key record the relay stores for an account. Everything in it is safe
 /// for the relay to see: public keys, a key check and sealed secrets.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AccountKeys {
     pub version: u32,
     pub account_id: AccountId,
     /// Starts at 0 and goes up by one on each key rotation.
     pub epoch: u32,
+    /// Goes up by one on every change to the record, so a device can refuse
+    /// a record older than one it has already seen.
+    pub revision: u64,
     /// Identifies the current root secret.
     pub key_check: KeyCheck,
     /// The current Ed25519 relay-authentication public key.
@@ -89,6 +93,7 @@ impl AccountKeys {
             version: FORMAT_VERSION,
             account_id,
             epoch,
+            revision: 0,
             key_check: root.key_check(&account_id),
             auth_public_key: root.derive(&account_id).auth_public_key(),
             passkeys: Vec::new(),
@@ -135,6 +140,7 @@ impl AccountKeys {
             self.epoch,
             &credential_id_hash,
         )?;
+        self.revision = self.next_revision()?;
         self.passkeys.push(PasskeyInfo {
             credential_id_hash,
             label: label.to_owned(),
@@ -188,6 +194,7 @@ impl AccountKeys {
         if self.passkeys.len() == 1 {
             return Err(Error::LastPasskey);
         }
+        self.revision = self.next_revision()?;
         Ok(self.passkeys.remove(index))
     }
 
@@ -200,6 +207,7 @@ impl AccountKeys {
         let root = RootSecret::generate();
         let epoch = self.epoch.checked_add(1).ok_or(Error::Malformed("epoch"))?;
         let mut next = Self::empty(self.account_id, epoch, &root);
+        next.revision = self.next_revision()?;
         for p in &self.passkeys {
             let wrapped = WrappedSecret::seal(
                 &root,
@@ -215,6 +223,14 @@ impl AccountKeys {
         }
         *self = next;
         Ok(root)
+    }
+
+    /// The revision for the next change. The relay controls the stored value,
+    /// so overflow is an error rather than a panic.
+    fn next_revision(&self) -> Result<u64> {
+        self.revision
+            .checked_add(1)
+            .ok_or(Error::Malformed("revision"))
     }
 
     pub fn to_json(&self) -> String {
@@ -278,7 +294,10 @@ mod tests {
     fn create_registers_one_passkey() {
         let pk = SoftPasskey::generate();
         let (keys, root) = AccountKeys::create(&pk, "laptop").unwrap();
-        assert_eq!((keys.version, keys.epoch), (FORMAT_VERSION, 0));
+        assert_eq!(
+            (keys.version, keys.epoch, keys.revision),
+            (FORMAT_VERSION, 0, 1)
+        );
         assert_eq!(keys.passkeys.len(), 1);
         assert_eq!(keys.passkeys[0].label, "laptop");
         assert!(
@@ -341,6 +360,7 @@ mod tests {
             version: FORMAT_VERSION,
             account_id,
             epoch: 0,
+            revision: 0,
             key_check: root.key_check(&account_id),
             auth_public_key: root.derive(&account_id).auth_public_key(),
             passkeys: vec![PasskeyInfo {
@@ -366,10 +386,15 @@ mod tests {
     fn json_round_trip_and_version_check() {
         let keys = record(&RootSecret::generate());
         assert_eq!(AccountKeys::from_json(&keys.to_json()).unwrap(), keys);
-        let future = keys.to_json().replace("\"version\": 1", "\"version\": 2");
+        let future = keys.to_json().replace("\"version\": 2", "\"version\": 3");
         assert_eq!(
             AccountKeys::from_json(&future),
-            Err(Error::UnsupportedVersion(2))
+            Err(Error::UnsupportedVersion(3))
+        );
+        let extra = keys.to_json().replacen('{', "{\"extra\": 1,", 1);
+        assert_eq!(
+            AccountKeys::from_json(&extra),
+            Err(Error::Malformed("account keys"))
         );
         assert_eq!(
             AccountKeys::from_json("{}"),
@@ -532,6 +557,21 @@ mod tests {
                 .unwrap(),
             new
         );
+    }
+
+    #[test]
+    fn every_change_bumps_the_revision() {
+        let (mut keys, root) = AccountKeys::create(&SoftPasskey::generate(), "a").unwrap();
+        let b = SoftPasskey::generate();
+        keys.add_passkey(&root, &b, "b").unwrap();
+        assert_eq!(keys.revision, 2);
+        let root = keys.rotate(&root).unwrap();
+        assert_eq!(keys.revision, 3);
+        keys.remove_passkey(&CredentialIdHash::of(b.credential_id()))
+            .unwrap();
+        assert_eq!(keys.revision, 4);
+        keys.revision = u64::MAX;
+        assert_eq!(keys.rotate(&root), Err(Error::Malformed("revision")));
     }
 
     #[test]

@@ -38,7 +38,7 @@ pub use passkey::{
 pub use recovery::RecoveryKey;
 pub use wrap::WrappedSecret;
 /// Format version of every serialized structure in this crate.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 pub(crate) fn random_bytes<const N: usize>() -> [u8; N] {
     let mut out = [0u8; N];

@@ -18,6 +18,7 @@ const INFO: &[u8] = b"srssly/v1/root-wrap";
 /// The associated data binds it to the account, the key epoch and the
 /// passkey, so a wrapped secret can't be replayed into another slot.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WrappedSecret {
     /// The passkey's X25519 public key (see [`PasskeyKeyPair`]).
     #[serde(with = "b64")]
