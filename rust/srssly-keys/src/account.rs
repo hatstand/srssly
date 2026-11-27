@@ -371,7 +371,8 @@ impl AccountKeys {
 
     /// Unlocks with a passkey, then rebinds it to the current epoch if its
     /// binding is from before a rotation. Returns the root and whether the
-    /// record changed; if it did, store the new record on the relay. Use this
+    /// record changed; if it did, store the new record on the relay, and once
+    /// the relay accepts it, [`verify`](Self::verify) it for a [`KnownEpoch`]. Use this
     /// rather than [`unlock`](Self::unlock) wherever the app can write back.
     /// Rebinding does not stop a fork: a relay that kept an older record can
     /// serve one rotated by a former root holder. A device that has seen the
@@ -411,7 +412,9 @@ impl AccountKeys {
             .iter()
             .find(|p| &p.credential_id_hash == credential_id_hash)
     }
-    /// Unlocks the root secret with a registered passkey.
+    /// Unlocks the root secret with a registered passkey. It returns no
+    /// [`KnownEpoch`]: a device that keeps the root should call
+    /// [`verify`](Self::verify) right after, to get one to store.
     pub fn unlock(&self, authenticator: &dyn PrfAuthenticator) -> Result<RootSecret> {
         let prf = authenticator.evaluate_prf(PRF_INPUT)?;
         self.unlock_with_prf(authenticator.credential_id(), &prf)
