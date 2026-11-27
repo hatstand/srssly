@@ -441,8 +441,9 @@ impl AccountKeys {
     /// Removes a passkey from the record. That is not revocation: a device
     /// that already unlocked the root secret keeps it, and the removed passkey
     /// still opens any older copy of the record (a backup, or one the relay
-    /// kept) until the next [`rotate`](Self::rotate). Rotate after removing a
-    /// lost passkey. Refuses to remove the last passkey.
+    /// kept) until the next [`rotate`](Self::rotate). For a lost passkey use
+    /// [`remove_and_rotate`](Self::remove_and_rotate) instead. Refuses to
+    /// remove the last passkey.
     /// Needs the unlocked root secret, to re-sign the record.
     pub fn remove_passkey(
         &mut self,
@@ -465,12 +466,45 @@ impl AccountKeys {
     }
 
     /// Replaces the root secret with a new one, sealed to every registered
-    /// passkey, and returns it. The old secret, any recovery key made from it,
-    /// and any device holding it no longer unlock the account. The caller must
-    /// re-encrypt synced records under the new keys.
+    /// passkey, and returns it. The old secret and any device holding only it
+    /// no longer unlock the account. The caller must re-encrypt synced records
+    /// under the new keys.
+    ///
+    /// The recovery key is the root secret, so rotation always invalidates it:
+    /// show the user a new one ([`RecoveryKey::from_root`]) straight away.
+    ///
+    /// Rotation does not evict a passkey: the new root is sealed to the same
+    /// passkey public keys, and anything that kept a passkey's PRF output
+    /// (a compromised device that unlocked with it, or any device a synced
+    /// passkey reached) opens the new one too. To recover from a compromised
+    /// device: [`verify`](Self::verify) the record and check its passkey list
+    /// for entries the user doesn't recognise (that device held the root and
+    /// could have added its own), register a fresh credential, then call
+    /// [`remove_and_rotate`](Self::remove_and_rotate) with every passkey the
+    /// device used. Fresh credential first: with one synced passkey, removing
+    /// it first would leave none.
     pub fn rotate(&mut self, current: &RootSecret) -> Result<RootSecret> {
+        self.remove_and_rotate(current, &[])
+    }
+
+    /// Removes `remove` and rotates, in one signed change, so the removed
+    /// passkeys never receive the new root. Refuses to remove every passkey.
+    pub fn remove_and_rotate(
+        &mut self,
+        current: &RootSecret,
+        remove: &[CredentialIdHash],
+    ) -> Result<RootSecret> {
         // Only entries a root holder signed get the new secret.
         self.verify_signed(current)?;
+        if remove.iter().any(|h| self.find(h).is_none()) {
+            return Err(Error::UnknownPasskey);
+        }
+        let kept: Vec<_> = (self.passkeys.iter())
+            .filter(|p| !remove.contains(&p.credential_id_hash))
+            .collect();
+        if kept.is_empty() {
+            return Err(Error::LastPasskey);
+        }
         let root = RootSecret::generate();
         let epoch = self.epoch.checked_add(1).ok_or(Error::Malformed("epoch"))?;
         let mut next = Self::empty(self.account_id, epoch, &root);
@@ -481,7 +515,7 @@ impl AccountKeys {
         link.signature = old_key.sign(&link.signed_bytes(&self.account_id)).to_vec();
         next.epochs = self.epochs.clone();
         next.epochs.push(link);
-        for p in &self.passkeys {
+        for p in kept {
             let wrapped = WrappedSecret::seal(
                 &root,
                 &p.wrapped.public_key,
@@ -841,6 +875,48 @@ mod tests {
         assert_eq!(keys.rotate(&old), Err(Error::WrongRootSecret));
         let labels: Vec<_> = keys.passkeys.iter().map(|p| p.label.as_str()).collect();
         assert_eq!(labels, ["a", "b"]);
+    }
+
+    /// Fresh review finding 3: a passkey whose PRF output leaked keeps
+    /// opening the root after a plain rotation, but not after it is removed
+    /// in the same step.
+    #[test]
+    fn remove_and_rotate_evicts_leaked_passkeys() {
+        let a = SoftPasskey::generate();
+        let b = SoftPasskey::generate();
+        let c = SoftPasskey::generate();
+        let (mut keys, root) = AccountKeys::create(&a, "a").unwrap();
+        keys.add_passkey(&root, &b, "b").unwrap();
+        keys.add_passkey(&root, &c, "c").unwrap();
+        let leaked = b.evaluate_prf(PRF_INPUT).unwrap();
+        let b_hash = CredentialIdHash::of(b.credential_id());
+        let c_hash = CredentialIdHash::of(c.credential_id());
+
+        let mut plain = keys.clone();
+        let new = plain.rotate(&root).unwrap();
+        assert_eq!(
+            plain.unlock_with_prf(b.credential_id(), &leaked).unwrap(),
+            new
+        );
+
+        let revision = keys.revision;
+        let new = keys.remove_and_rotate(&root, &[b_hash, c_hash]).unwrap();
+        assert_eq!(keys.revision, revision + 1);
+        assert_eq!(keys.unlock(&a).unwrap(), new);
+        assert_eq!(
+            keys.unlock_with_prf(b.credential_id(), &leaked),
+            Err(Error::UnknownPasskey)
+        );
+        let a_hash = CredentialIdHash::of(a.credential_id());
+        assert_eq!(
+            keys.remove_and_rotate(&new, &[a_hash]),
+            Err(Error::LastPasskey)
+        );
+        assert_eq!(
+            keys.remove_and_rotate(&new, &[b_hash]),
+            Err(Error::UnknownPasskey)
+        );
+        assert_eq!(AccountKeys::from_json(&keys.to_json()).unwrap(), keys);
     }
 
     #[test]
