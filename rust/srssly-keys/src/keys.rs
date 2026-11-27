@@ -146,6 +146,13 @@ impl AuthPublicKey {
     pub fn to_bytes(&self) -> [u8; 32] {
         self.0.to_bytes()
     }
+
+    /// Whether `signature` is this key's Ed25519 signature of `message`
+    /// (strict verification: no malleable or small-order signatures).
+    pub fn verify(&self, message: &[u8], signature: &[u8; 64]) -> bool {
+        let signature = ed25519_dalek::Signature::from_bytes(signature);
+        self.0.verify_strict(message, &signature).is_ok()
+    }
 }
 
 impl fmt::Debug for AuthPublicKey {

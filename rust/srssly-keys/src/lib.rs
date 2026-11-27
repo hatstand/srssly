@@ -23,6 +23,7 @@ mod b64;
 mod error;
 mod keys;
 mod passkey;
+mod transcript;
 
 // Keep `crate::recovery` and `crate::wrap` as short paths inside the crate.
 use keys::{recovery, wrap};

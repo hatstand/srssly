@@ -76,7 +76,7 @@ srssly-keys unlock --account acct.json --passkey b.json --device-out dev2.json
 srssly-keys recovery-key --device dev.json
 srssly-keys recover --account acct.json --words "…24 words…" --device-out dev3.json
 srssly-keys rotate --account acct.json --device dev.json
-srssly-keys remove-passkey --account acct.json --passkey b.json
+srssly-keys remove-passkey --account acct.json --device dev.json --passkey b.json
 srssly-keys verify --account acct.json --device dev.json
 # A real authenticator: pass what the browser's PRF extension returned.
 srssly-keys unlock --account acct.json --credential-id <base64url> --prf <base64url>
@@ -87,5 +87,5 @@ Keychain and holds the root secret in plain text, so it is for testing only.
 
 Error codes: `wrong_passkey`, `unknown_passkey`, `duplicate_passkey`,
 `last_passkey`, `decryption_failed`, `wrong_root_secret`,
-`invalid_recovery_key`, `unsupported_version`, `authenticator`, `malformed`,
+`invalid_recovery_key`, `unsupported_version`, `authenticator`, `tampered`, `malformed`,
 `io`, `usage`.

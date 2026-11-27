@@ -275,6 +275,8 @@ fn manage_passkeys() {
         "remove-passkey",
         "--account",
         "acct.json",
+        "--device",
+        "dev.json",
         "--credential-id-hash",
         hash,
     ]);
@@ -287,6 +289,8 @@ fn manage_passkeys() {
         "remove-passkey",
         "--account",
         "acct.json",
+        "--device",
+        "dev.json",
         "--passkey",
         "b.json",
     ]);
@@ -295,6 +299,8 @@ fn manage_passkeys() {
             "remove-passkey",
             "--account",
             "acct.json",
+            "--device",
+            "dev.json",
             "--passkey",
             "a.json"
         ]),

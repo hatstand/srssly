@@ -30,6 +30,10 @@ pub enum Error {
     /// The authenticator failed to produce a PRF output.
     #[error("authenticator error: {0}")]
     Authenticator(String),
+    /// The key record's signature or a passkey binding doesn't verify: the
+    /// record was changed by someone without the account's keys.
+    #[error("the key record was tampered with")]
+    Tampered,
     /// A stored field has the wrong length or encoding.
     #[error("malformed {0}")]
     Malformed(&'static str),
@@ -48,6 +52,7 @@ impl Error {
             Error::InvalidRecoveryKey(_) => "invalid_recovery_key",
             Error::UnsupportedVersion(_) => "unsupported_version",
             Error::Authenticator(_) => "authenticator",
+            Error::Tampered => "tampered",
             Error::Malformed(_) => "malformed",
         }
     }

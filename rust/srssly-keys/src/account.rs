@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::keys::{AuthPublicKey, KeyCheck, RootSecret};
 use crate::passkey::{CredentialIdHash, PRF_INPUT, PasskeyKeyPair, PrfAuthenticator, PrfOutput};
 use crate::recovery::RecoveryKey;
+use crate::transcript::Transcript;
 use crate::wrap::WrappedSecret;
 use crate::{Error, FORMAT_VERSION, Result, b64, random_bytes};
 
@@ -65,6 +66,10 @@ pub struct AccountKeys {
     /// The current Ed25519 relay-authentication public key.
     pub auth_public_key: AuthPublicKey,
     pub passkeys: Vec<PasskeyInfo>,
+    /// Ed25519 signature of everything above by the current auth key, so only
+    /// holders of the root secret can change the record.
+    #[serde(with = "b64")]
+    pub signature: [u8; 64],
 }
 
 impl AccountKeys {
@@ -84,6 +89,7 @@ impl AccountKeys {
         let root = RootSecret::generate();
         let account_id = AccountId::generate();
         let mut keys = Self::empty(account_id, 0, &root);
+        keys.sign(&root);
         keys.add_passkey_with_prf(&root, credential_id, prf, label)?;
         Ok((keys, root))
     }
@@ -97,6 +103,47 @@ impl AccountKeys {
             key_check: root.key_check(&account_id),
             auth_public_key: root.derive(&account_id).auth_public_key(),
             passkeys: Vec::new(),
+            signature: [0; 64],
+        }
+    }
+
+    /// The bytes the record signature covers: every field but the signature.
+    fn signed_bytes(&self) -> Transcript {
+        let mut t = Transcript::new(b"srssly/v2/record");
+        t.field(&self.version.to_be_bytes())
+            .field(self.account_id.as_bytes())
+            .field(&self.epoch.to_be_bytes())
+            .field(&self.revision.to_be_bytes())
+            .field(self.key_check.as_bytes())
+            .field(&self.auth_public_key.to_bytes())
+            .field(&(self.passkeys.len() as u32).to_be_bytes());
+        for p in &self.passkeys {
+            t.field(p.credential_id_hash.as_bytes())
+                .field(p.label.as_bytes())
+                .field(&p.wrapped.public_key)
+                .field(&p.wrapped.encapped_key)
+                .field(&p.wrapped.ciphertext);
+        }
+        t
+    }
+
+    fn sign(&mut self, root: &RootSecret) {
+        let auth_key = root.derive(&self.account_id).auth_key;
+        self.signature = auth_key.sign(self.signed_bytes().bytes());
+    }
+
+    /// Checks that `root` is current and that the record is signed by the
+    /// auth key derived from it. The key comes from the root, not from the
+    /// record, so a relay can't substitute its own.
+    fn verify_signed(&self, root: &RootSecret) -> Result<()> {
+        self.verify_root(root)?;
+        let public = root.derive(&self.account_id).auth_public_key();
+        if public == self.auth_public_key
+            && public.verify(self.signed_bytes().bytes(), &self.signature)
+        {
+            Ok(())
+        } else {
+            Err(Error::Tampered)
         }
     }
 
@@ -127,7 +174,7 @@ impl AccountKeys {
         prf: &PrfOutput,
         label: &str,
     ) -> Result<()> {
-        self.verify_root(root)?;
+        self.verify_signed(root)?;
         let credential_id_hash = CredentialIdHash::of(credential_id);
         if self.find(&credential_id_hash).is_some() {
             return Err(Error::DuplicatePasskey);
@@ -146,6 +193,7 @@ impl AccountKeys {
             label: label.to_owned(),
             wrapped,
         });
+        self.sign(root);
         Ok(())
     }
 
@@ -169,14 +217,14 @@ impl AccountKeys {
             self.epoch,
             &hash,
         )?;
-        self.verify_root(&root)?;
+        self.verify_signed(&root)?;
         Ok(root)
     }
 
     /// Unlocks the root secret from a recovery key, checking it is current.
     pub fn unlock_with_recovery_key(&self, key: &RecoveryKey) -> Result<RootSecret> {
         let root = key.root_secret();
-        self.verify_root(&root)?;
+        self.verify_signed(&root)?;
         Ok(root)
     }
 
@@ -185,7 +233,13 @@ impl AccountKeys {
     /// still opens any older copy of the record (a backup, or one the relay
     /// kept) until the next [`rotate`](Self::rotate). Rotate after removing a
     /// lost passkey. Refuses to remove the last passkey.
-    pub fn remove_passkey(&mut self, credential_id_hash: &CredentialIdHash) -> Result<PasskeyInfo> {
+    /// Needs the unlocked root secret, to re-sign the record.
+    pub fn remove_passkey(
+        &mut self,
+        root: &RootSecret,
+        credential_id_hash: &CredentialIdHash,
+    ) -> Result<PasskeyInfo> {
+        self.verify_signed(root)?;
         let index = self
             .passkeys
             .iter()
@@ -195,7 +249,9 @@ impl AccountKeys {
             return Err(Error::LastPasskey);
         }
         self.revision = self.next_revision()?;
-        Ok(self.passkeys.remove(index))
+        let removed = self.passkeys.remove(index);
+        self.sign(root);
+        Ok(removed)
     }
 
     /// Replaces the root secret with a new one, sealed to every registered
@@ -203,7 +259,8 @@ impl AccountKeys {
     /// and any device holding it no longer unlock the account. The caller must
     /// re-encrypt synced records under the new keys.
     pub fn rotate(&mut self, current: &RootSecret) -> Result<RootSecret> {
-        self.verify_root(current)?;
+        // Only entries a root holder signed get the new secret.
+        self.verify_signed(current)?;
         let root = RootSecret::generate();
         let epoch = self.epoch.checked_add(1).ok_or(Error::Malformed("epoch"))?;
         let mut next = Self::empty(self.account_id, epoch, &root);
@@ -221,6 +278,7 @@ impl AccountKeys {
                 ..p.clone()
             });
         }
+        next.sign(&root);
         *self = next;
         Ok(root)
     }
@@ -356,7 +414,7 @@ mod tests {
             &credential_id_hash,
         )
         .unwrap();
-        AccountKeys {
+        let mut keys = AccountKeys {
             version: FORMAT_VERSION,
             account_id,
             epoch: 0,
@@ -368,7 +426,10 @@ mod tests {
                 label: "laptop".into(),
                 wrapped,
             }],
-        }
+            signature: [0; 64],
+        };
+        keys.sign(root);
+        keys
     }
 
     #[test]
@@ -496,17 +557,17 @@ mod tests {
         let (mut keys, root) = AccountKeys::create(&a, "a").unwrap();
         keys.add_passkey(&root, &b, "b").unwrap();
         let removed = keys
-            .remove_passkey(&CredentialIdHash::of(b.credential_id()))
+            .remove_passkey(&root, &CredentialIdHash::of(b.credential_id()))
             .unwrap();
         assert_eq!(removed.label, "b");
         assert_eq!(keys.unlock(&b), Err(Error::UnknownPasskey));
         assert_eq!(keys.unlock(&a).unwrap(), root);
         assert_eq!(
-            keys.remove_passkey(&CredentialIdHash::of(a.credential_id())),
+            keys.remove_passkey(&root, &CredentialIdHash::of(a.credential_id())),
             Err(Error::LastPasskey)
         );
         assert_eq!(
-            keys.remove_passkey(&CredentialIdHash::of(b"nope")),
+            keys.remove_passkey(&root, &CredentialIdHash::of(b"nope")),
             Err(Error::UnknownPasskey)
         );
     }
@@ -559,6 +620,30 @@ mod tests {
         );
     }
 
+    /// Review finding 2: a relay that appends its own passkey entry must not
+    /// receive the next rotated secret.
+    #[test]
+    fn injected_passkey_is_refused() {
+        let (mut keys, root) = AccountKeys::create(&SoftPasskey::generate(), "a").unwrap();
+        let relay = SoftPasskey::generate();
+        let mut forged = keys.clone();
+        let prf = relay.evaluate_prf(PRF_INPUT).unwrap();
+        let kp = PasskeyKeyPair::from_prf(&prf);
+        let hash = CredentialIdHash::of(relay.credential_id());
+        let wrapped = WrappedSecret::seal(&root, kp.public_key(), &keys.account_id, 0, &hash);
+        forged.passkeys.push(PasskeyInfo {
+            credential_id_hash: hash,
+            label: "relay".into(),
+            wrapped: wrapped.unwrap(),
+        });
+        assert_eq!(forged.clone().rotate(&root), Err(Error::Tampered));
+        let other = SoftPasskey::generate();
+        assert_eq!(forged.add_passkey(&root, &other, "x"), Err(Error::Tampered));
+        assert_eq!(forged.unlock(&relay), Err(Error::Tampered));
+        keys.passkeys[0].label = "renamed".into();
+        assert_eq!(keys.rotate(&root), Err(Error::Tampered));
+    }
+
     #[test]
     fn every_change_bumps_the_revision() {
         let (mut keys, root) = AccountKeys::create(&SoftPasskey::generate(), "a").unwrap();
@@ -567,10 +652,12 @@ mod tests {
         assert_eq!(keys.revision, 2);
         let root = keys.rotate(&root).unwrap();
         assert_eq!(keys.revision, 3);
-        keys.remove_passkey(&CredentialIdHash::of(b.credential_id()))
+        keys.remove_passkey(&root, &CredentialIdHash::of(b.credential_id()))
             .unwrap();
         assert_eq!(keys.revision, 4);
         keys.revision = u64::MAX;
+        assert_eq!(keys.rotate(&root), Err(Error::Tampered));
+        keys.sign(&root);
         assert_eq!(keys.rotate(&root), Err(Error::Malformed("revision")));
     }
 

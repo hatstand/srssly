@@ -78,6 +78,9 @@ enum Command {
     RemovePasskey {
         #[arg(long)]
         account: PathBuf,
+        /// An unlocked device, to re-sign the record.
+        #[arg(long)]
+        device: PathBuf,
         #[arg(long, conflicts_with = "passkey", required_unless_present = "passkey")]
         credential_id_hash: Option<String>,
         /// A software passkey file.
@@ -361,10 +364,12 @@ fn run(cli: Cli) -> Result<Value, CliError> {
         }
         Command::RemovePasskey {
             account,
+            device,
             credential_id_hash,
             passkey,
         } => {
             let mut keys = read_account(&account)?;
+            let root = read_json::<Device>(&device)?.root()?;
             let hash = match (credential_id_hash, passkey) {
                 (Some(h), _) => CredentialIdHash::from_base64url(&h)?,
                 (None, Some(path)) => {
@@ -372,7 +377,7 @@ fn run(cli: Cli) -> Result<Value, CliError> {
                 }
                 (None, None) => unreachable!("clap requires one"),
             };
-            let removed = keys.remove_passkey(&hash)?;
+            let removed = keys.remove_passkey(&root, &hash)?;
             write_account(&account, &keys)?;
             let mut out = summary(&keys);
             out["removed"] = json!(removed.label);
