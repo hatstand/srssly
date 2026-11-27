@@ -70,10 +70,14 @@ enum Command {
         #[arg(long, default_value = "passkey")]
         label: String,
     },
-    /// List registered passkeys.
+    /// List registered passkeys. Without `--device` nothing is verified: the
+    /// relay could have added, hidden or renamed any of them.
     List {
         #[arg(long)]
         account: PathBuf,
+        /// An unlocked device, to verify the record before listing it.
+        #[arg(long)]
+        device: Option<PathBuf>,
     },
     /// Remove a passkey by credential ID hash or passkey file.
     RemovePasskey {
@@ -111,7 +115,8 @@ enum Command {
         #[arg(long)]
         device_out: Option<PathBuf>,
     },
-    /// Check a device's root secret against the account and show its public keys.
+    /// Verify the account record with a device's root secret (key check,
+    /// signature and epoch chain) and show its public keys.
     Verify {
         #[arg(long)]
         account: PathBuf,
@@ -351,8 +356,11 @@ fn run(cli: Cli) -> Result<Value, CliError> {
             write_account(&account, &keys)?;
             Ok(summary(&keys))
         }
-        Command::List { account } => {
+        Command::List { account, device } => {
             let keys = read_account(&account)?;
+            if let Some(device) = &device {
+                keys.verify(&read_json::<Device>(device)?.root()?)?;
+            }
             let passkeys: Vec<Value> = keys
                 .passkeys
                 .iter()
@@ -365,7 +373,7 @@ fn run(cli: Cli) -> Result<Value, CliError> {
                 })
                 .collect();
             Ok(
-                json!({ "account_id": keys.account_id.to_string(), "epoch": keys.epoch, "passkeys": passkeys }),
+                json!({ "account_id": keys.account_id.to_string(), "epoch": keys.epoch, "verified": device.is_some(), "passkeys": passkeys }),
             )
         }
         Command::RemovePasskey {
@@ -418,7 +426,7 @@ fn run(cli: Cli) -> Result<Value, CliError> {
         Command::Verify { account, device } => {
             let keys = read_account(&account)?;
             let root = read_json::<Device>(&device)?.root()?;
-            keys.verify_root(&root)?;
+            keys.verify(&root)?;
             let derived = root.derive(&keys.account_id);
             let mut out = summary(&keys);
             out["derived_auth_public_key"] =

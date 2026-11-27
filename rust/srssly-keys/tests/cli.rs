@@ -255,6 +255,9 @@ fn manage_passkeys() {
         .map(|p| p["label"].as_str().unwrap())
         .collect();
     assert_eq!(labels, ["laptop", "phone", "yubikey"]);
+    assert_eq!(list["verified"], false);
+    let list = e.ok(&["list", "--account", "acct.json", "--device", "dev.json"]);
+    assert_eq!(list["verified"], true);
 
     // Every passkey unlocks the same account on a fresh device.
     for pk in ["a.json", "b.json", "c.json"] {
