@@ -21,8 +21,10 @@ for target in "${targets[@]}"; do
 done
 
 rm -rf "$out" "$pkg/SrsslyKeysFFI.xcframework"
-"${cargo[@]}" run "${manifest[@]}" -p uniffi-bindgen -- generate --language swift \
-  --library "rust/target/${targets[0]}/release/libsrssly_keys_ffi.a" --out-dir "$out/bindings"
+# uniffi-bindgen runs `cargo metadata` in its working directory to find the
+# crate's uniffi.toml, so run it from the workspace.
+(cd rust && "${cargo[@]}" run --locked -p uniffi-bindgen -- generate --language swift \
+  --library "target/${targets[0]}/release/libsrssly_keys_ffi.a" --out-dir "target/ios/bindings")
 mkdir -p "$out/headers" "$pkg/Sources/SrsslyKeys"
 cp "$out/bindings/SrsslyKeysFFI.h" "$out/headers/"
 cp "$out/bindings/SrsslyKeysFFI.modulemap" "$out/headers/module.modulemap"
