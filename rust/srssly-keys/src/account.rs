@@ -90,6 +90,19 @@ impl EpochLink {
     }
 }
 
+/// What a device remembers about the last record it verified: public values
+/// only, so it can be stored beside the root secret without extra care.
+/// [`AccountKeys::verify_successor`] uses it to refuse a fork or a rollback.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnownEpoch {
+    pub account_id: AccountId,
+    pub epoch: u32,
+    pub key_check: KeyCheck,
+    pub auth_public_key: AuthPublicKey,
+    pub revision: u64,
+}
+
 /// What a passkey's binding covers: `link`'s values, the passkey's credential
 /// hash and its public key.
 fn binding_bytes(account: &AccountId, link: &EpochLink, p: &PasskeyInfo) -> Transcript {
@@ -209,14 +222,53 @@ impl AccountKeys {
     /// record, so a relay can't substitute its own.
     fn verify_signed(&self, root: &RootSecret) -> Result<()> {
         self.check_key_check(root)?;
-        let public = root.derive(&self.account_id).auth_public_key();
-        if public == self.auth_public_key
+        self.verify_signature_by(&root.derive(&self.account_id).auth_public_key())
+    }
+
+    fn verify_signature_by(&self, public: &AuthPublicKey) -> Result<()> {
+        if *public == self.auth_public_key
             && public.verify(self.signed_bytes().bytes(), &self.signature)
         {
             Ok(())
         } else {
             Err(Error::Tampered)
         }
+    }
+
+    /// The values to remember after [`verify`](Self::verify) or an unlock
+    /// succeeds, for [`verify_successor`](Self::verify_successor) next time.
+    pub fn known_epoch(&self) -> KnownEpoch {
+        KnownEpoch {
+            account_id: self.account_id,
+            epoch: self.epoch,
+            key_check: self.key_check,
+            auth_public_key: self.auth_public_key,
+            revision: self.revision,
+        }
+    }
+
+    /// Checks that this record descends from one the device already trusts:
+    /// same account, a revision no lower than `known`'s, and an intact chain
+    /// that passes through `known`'s epoch with `known`'s keys, then signs the
+    /// record. Needs no root, so a device whose root no longer matches (after
+    /// another device rotated) can tell a real rotation from a fork made with
+    /// a rotated-away root. Call it before unlocking with a passkey again.
+    pub fn verify_successor(&self, known: &KnownEpoch) -> Result<()> {
+        if self.account_id != known.account_id {
+            return Err(Error::Tampered);
+        }
+        if self.revision < known.revision {
+            return Err(Error::Stale);
+        }
+        self.verify_chain()?;
+        let link = self.epochs.iter().find(|l| l.epoch == known.epoch);
+        match link {
+            Some(l)
+                if (l.key_check, l.auth_public_key) == (known.key_check, known.auth_public_key) => {
+            }
+            _ => return Err(Error::Tampered),
+        }
+        self.verify_signature_by(&self.auth_public_key)
     }
 
     /// Checks the whole record with the current root secret: that `root` is
@@ -300,9 +352,11 @@ impl AccountKeys {
     /// Unlocks with a passkey, then rebinds it to the current epoch if its
     /// binding is from before a rotation. Returns the root and whether the
     /// record changed; if it did, store the new record on the relay. Use this
-    /// rather than [`unlock`](Self::unlock) wherever the app can write back:
-    /// a passkey bound at an old epoch trusts the chain from there, which a
-    /// rotated-away root could have forked together with the relay.
+    /// rather than [`unlock`](Self::unlock) wherever the app can write back.
+    /// Rebinding does not stop a fork: a relay that kept an older record can
+    /// serve one rotated by a former root holder. A device that has seen the
+    /// account before must call [`verify_successor`](Self::verify_successor)
+    /// first.
     pub fn unlock_and_rebind(
         &mut self,
         authenticator: &dyn PrfAuthenticator,
@@ -948,6 +1002,48 @@ mod tests {
         let back = AccountKeys::from_json(&keys.to_json()).unwrap();
         assert_eq!(back.unlock(&a).unwrap(), root);
         assert_eq!(keys.unlock_and_rebind(&a).unwrap(), (root, false));
+    }
+
+    /// Fresh review finding 2: a former root holder and the relay fork the
+    /// account from a record kept from before a rotation. The rebind doesn't
+    /// stop it, but a device that remembers the epoch it knows does.
+    #[test]
+    fn successor_check_refuses_a_fork_from_a_rotated_away_root() {
+        let a = SoftPasskey::generate();
+        let (mut keys, old_root) = AccountKeys::create(&a, "a").unwrap();
+        let kept = keys.clone();
+        let root = keys.rotate(&old_root).unwrap();
+        keys.unlock_and_rebind(&a).unwrap();
+        let known = keys.known_epoch();
+
+        let mut fork = kept;
+        let fork_root = fork.rotate(&old_root).unwrap();
+        for _ in 0..3 {
+            fork.add_passkey(&fork_root, &SoftPasskey::generate(), "x")
+                .unwrap();
+        }
+        let fork = AccountKeys::from_json(&fork.to_json()).unwrap();
+        assert!(fork.revision > known.revision);
+        assert_eq!(fork.unlock(&a).unwrap(), fork_root, "the attack works");
+        assert_eq!(fork.verify_successor(&known), Err(Error::Tampered));
+
+        // Real changes after the known epoch pass, older records don't.
+        let older = keys.clone();
+        keys.add_passkey(&root, &SoftPasskey::generate(), "b")
+            .unwrap();
+        let root = keys.rotate(&root).unwrap();
+        keys.verify_successor(&known).unwrap();
+        keys.verify(&root).unwrap();
+        let mut stale = keys.known_epoch();
+        stale.revision += 1;
+        assert_eq!(keys.verify_successor(&stale), Err(Error::Stale));
+        let mut other = known.clone();
+        other.account_id = AccountId::from_bytes([1; 16]);
+        assert_eq!(older.verify_successor(&other), Err(Error::Tampered));
+        // A relay edit after the chain is caught by the record signature.
+        let mut renamed = keys.clone();
+        renamed.passkeys[0].label = "relay".into();
+        assert_eq!(renamed.verify_successor(&known), Err(Error::Tampered));
     }
 
     /// Pins the binding MAC and the link signature byte for byte; the same

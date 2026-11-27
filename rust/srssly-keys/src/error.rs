@@ -34,6 +34,9 @@ pub enum Error {
     /// record was changed by someone without the account's keys.
     #[error("the key record was tampered with")]
     Tampered,
+    /// The record is older than one this device has already seen.
+    #[error("the key record is older than one already seen")]
+    Stale,
     /// A stored field has the wrong length or encoding.
     #[error("malformed {0}")]
     Malformed(&'static str),
@@ -53,6 +56,7 @@ impl Error {
             Error::UnsupportedVersion(_) => "unsupported_version",
             Error::Authenticator(_) => "authenticator",
             Error::Tampered => "tampered",
+            Error::Stale => "stale",
             Error::Malformed(_) => "malformed",
         }
     }

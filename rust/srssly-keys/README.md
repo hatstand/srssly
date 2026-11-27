@@ -67,13 +67,24 @@ itself (format version 2):
   binding, which only that passkey's PRF can make. The binding vouches for
   its epoch, the signed epoch links for each rotation after it, and the
   record signature for the rest.
-- **Lazy rebind.** A binding from before a rotation trusts every link since,
-  and a rotated-away root could fork that chain together with the relay.
-  `unlock_and_rebind` moves the passkey's binding to the current epoch the
-  first time it unlocks after a rotation; store the record when it says so.
-- **Not covered:** a relay can serve an older, validly signed record. The
-  `revision` goes up on every change so devices can refuse one older than
-  they have seen; a brand-new device can't tell.
+- **Lazy rebind.** `unlock_and_rebind` moves a passkey's binding to the
+  current epoch the first time it unlocks after a rotation; store the record
+  when it says so. This keeps bindings fresh but does not stop a fork: a
+  binding MAC can't be revoked, so a relay that kept a record from before a
+  rotation can serve one that a former root holder rotated differently, and
+  an old binding vouches for it.
+- **Devices that have seen the account check for forks.** After each
+  successful unlock or `verify`, store `known_epoch()` (public values: epoch,
+  key check, auth public key, revision) beside the root. Before trusting a
+  fetched record, and above all before unlocking with a passkey again because
+  the root no longer matches, call `verify_successor(&known)`. It refuses a
+  record whose chain doesn't pass through the known epoch's keys (`tampered`)
+  or whose revision is lower (`stale`), so a fork from any epoch up to the
+  known one fails.
+- **Not covered:** a brand-new device has nothing to compare, so its first
+  sign-in trusts the relay not to collude with a former root holder, and not
+  to serve an older, validly signed record. A comparison code shown on an
+  existing device and the new one would close this; it isn't built yet.
 
 ## Authenticators
 
@@ -117,5 +128,5 @@ Keychain and holds the root secret in plain text, so it is for testing only.
 
 Error codes: `wrong_passkey`, `unknown_passkey`, `duplicate_passkey`,
 `last_passkey`, `decryption_failed`, `wrong_root_secret`,
-`invalid_recovery_key`, `unsupported_version`, `authenticator`, `tampered`, `malformed`,
+`invalid_recovery_key`, `unsupported_version`, `authenticator`, `tampered`, `stale`, `malformed`,
 `io`, `usage`.

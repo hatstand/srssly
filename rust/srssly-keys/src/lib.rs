@@ -28,7 +28,7 @@ mod transcript;
 // Keep `crate::recovery` and `crate::wrap` as short paths inside the crate.
 use keys::{recovery, wrap};
 
-pub use account::{AccountId, AccountKeys, Binding, EpochLink, PasskeyInfo};
+pub use account::{AccountId, AccountKeys, Binding, EpochLink, KnownEpoch, PasskeyInfo};
 pub use error::{Error, Result};
 pub use keys::{AuthKey, AuthPublicKey, DataKey, DerivedKeys, KeyCheck, RootSecret};
 #[cfg(any(test, feature = "soft-passkey"))]
