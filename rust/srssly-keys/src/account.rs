@@ -208,7 +208,7 @@ impl AccountKeys {
     /// auth key derived from it. The key comes from the root, not from the
     /// record, so a relay can't substitute its own.
     fn verify_signed(&self, root: &RootSecret) -> Result<()> {
-        self.verify_root(root)?;
+        self.check_key_check(root)?;
         let public = root.derive(&self.account_id).auth_public_key();
         if public == self.auth_public_key
             && public.verify(self.signed_bytes().bytes(), &self.signature)
@@ -219,8 +219,19 @@ impl AccountKeys {
         }
     }
 
-    /// Checks that `root` is this account's current root secret.
-    pub fn verify_root(&self, root: &RootSecret) -> Result<()> {
+    /// Checks the whole record with the current root secret: that `root` is
+    /// current, that the epoch chain is intact and that the record is signed
+    /// by the auth key derived from `root`. Until this passes, nothing in a
+    /// fetched record (passkeys, labels, epochs, revision) is authenticated,
+    /// so call it before showing or acting on one.
+    pub fn verify(&self, root: &RootSecret) -> Result<()> {
+        self.verify_chain()?;
+        self.verify_signed(root)
+    }
+
+    /// Checks only that `root`'s key check matches the record's, which the
+    /// relay controls. Not record verification: use [`verify`](Self::verify).
+    fn check_key_check(&self, root: &RootSecret) -> Result<()> {
         if root.key_check(&self.account_id) == self.key_check {
             Ok(())
         } else {
@@ -536,7 +547,7 @@ mod tests {
             keys.find(&CredentialIdHash::of(pk.credential_id()))
                 .is_some()
         );
-        keys.verify_root(&root).unwrap();
+        keys.verify(&root).unwrap();
         let derived = root.derive(&keys.account_id);
         assert_eq!(keys.auth_public_key, derived.auth_public_key());
     }
@@ -557,7 +568,7 @@ mod tests {
         let a = SoftPasskey::generate();
         let (mut keys, root) = AccountKeys::create(&a, "a").unwrap();
         let wrong_root = RootSecret::generate();
-        assert_eq!(keys.verify_root(&wrong_root), Err(Error::WrongRootSecret));
+        assert_eq!(keys.verify(&wrong_root), Err(Error::WrongRootSecret));
         assert_eq!(
             keys.add_passkey(&wrong_root, &SoftPasskey::generate(), "x"),
             Err(Error::WrongRootSecret)
@@ -603,14 +614,22 @@ mod tests {
     }
 
     #[test]
-    fn verify_root() {
+    fn verify_checks_root_and_signature() {
         let root = RootSecret::generate();
         let keys = record(&root);
-        keys.verify_root(&root).unwrap();
+        keys.verify(&root).unwrap();
         assert_eq!(
-            keys.verify_root(&RootSecret::generate()),
+            keys.verify(&RootSecret::generate()),
             Err(Error::WrongRootSecret)
         );
+        // Fresh review finding 4: a relay edit that leaves the key check alone
+        // is caught, as is a broken chain.
+        let mut renamed = keys.clone();
+        renamed.passkeys[0].label = "relay".into();
+        assert_eq!(renamed.verify(&root), Err(Error::Tampered));
+        let mut no_chain = keys.clone();
+        no_chain.epochs.clear();
+        assert_eq!(no_chain.verify(&root), Err(Error::Malformed("epochs")));
     }
 
     #[test]
@@ -757,7 +776,7 @@ mod tests {
         assert_ne!(keys.auth_public_key, before.auth_public_key);
         assert_eq!(keys.unlock(&a).unwrap(), new);
         assert_eq!(keys.unlock(&b).unwrap(), new);
-        assert_eq!(keys.verify_root(&old), Err(Error::WrongRootSecret));
+        assert_eq!(keys.verify(&old), Err(Error::WrongRootSecret));
         assert_eq!(keys.rotate(&old), Err(Error::WrongRootSecret));
         let labels: Vec<_> = keys.passkeys.iter().map(|p| p.label.as_str()).collect();
         assert_eq!(labels, ["a", "b"]);
