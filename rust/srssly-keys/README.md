@@ -106,7 +106,10 @@ software stand-in that behaves like a CTAP2 authenticator with
 `hmac-secret`: `HMAC-SHA-256(credRandom, SHA-256("WebAuthn PRF" ‖ 0x00 ‖ input))`. It is
 only compiled in tests or with the `soft-passkey` feature (which the `cli`
 feature turns on). No feature is on by default, so app builds never contain
-it; CI checks the iOS library for its symbols.
+it. CI checks that the FFI crate enables no srssly-keys feature (the real
+guard), and, as a backstop, `scripts/check-app-lib.sh` looks for the
+test-only symbols in the Linux and iOS libraries. Being a symbol check, it
+can't see code that was inlined away.
 Anything that can report a credential ID and PRF output (a browser, a
 platform passkey API) can also be used directly, through the `*_with_prf`
 functions or the CLI's `--credential-id`/`--prf` flags.

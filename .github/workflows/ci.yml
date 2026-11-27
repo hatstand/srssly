@@ -24,6 +24,10 @@ jobs:
       - uses: actions/checkout@v4
       - run: brew install xcodegen
       - run: ./scripts/build-rust-ios.sh
+      - name: Check the iOS libraries have no test-only code
+        run: |
+          rustup component add llvm-tools
+          ./scripts/check-app-lib.sh rust/target/aarch64-apple-ios/release/libsrssly_keys_ffi.a rust/target/aarch64-apple-ios-sim/release/libsrssly_keys_ffi.a
       - run: xcodegen generate
       # XcodeGen rewrites the entitlements; without iCloud the app crashes at launch.
       - name: Check entitlements survived generation
