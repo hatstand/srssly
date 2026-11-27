@@ -29,6 +29,9 @@ jobs:
       - name: Check the app library has no test-only code
         run: |
           # The guard: the FFI crate must enable none of srssly-keys' features.
+          # Policy, not an accident: when the app starts keeping the root in
+          # the Keychain through the FFI, allowing export-root-secret here is a
+          # deliberate change to make with that PR.
           features=$(cargo tree --locked -p srssly-keys-ffi -e features -i srssly-keys)
           if grep -E 'srssly-keys feature "(cli|soft-passkey|export-root-secret)"' <<<"$features"; then
             echo "srssly-keys-ffi enables a test-only srssly-keys feature" >&2
