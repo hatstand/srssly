@@ -77,6 +77,7 @@ impl RootSecret {
     /// The keys derived from this secret for `account`.
     pub fn derive(&self, account: &AccountId) -> DerivedKeys {
         let auth_seed = self.expand(account, b"auth-key");
+        let record_seed = self.expand(account, b"record-key");
         let mut data_key = DataKey([0; 32]);
         data_key
             .0
@@ -84,6 +85,7 @@ impl RootSecret {
         DerivedKeys {
             data_key,
             auth_key: AuthKey(SigningKey::from_bytes(&auth_seed)),
+            record_key: RecordKey(SigningKey::from_bytes(&record_seed)),
         }
     }
 }
@@ -114,6 +116,9 @@ pub struct DerivedKeys {
     pub data_key: DataKey,
     /// Ed25519 key that authenticates this account to the relay.
     pub auth_key: AuthKey,
+    /// Ed25519 key that signs the key record and epoch links. Crate-private:
+    /// nothing outside the crate can sign with it.
+    pub(crate) record_key: RecordKey,
 }
 
 impl DerivedKeys {
@@ -121,14 +126,29 @@ impl DerivedKeys {
     pub fn auth_public_key(&self) -> AuthPublicKey {
         self.auth_key.public_key()
     }
+
+    /// The key record and epoch links are signed by this key.
+    pub fn record_public_key(&self) -> AuthPublicKey {
+        AuthPublicKey(self.record_key.0.verifying_key())
+    }
+}
+
+/// The Ed25519 key that signs the key record and epoch links, derived
+/// separately from [`AuthKey`] so the two never sign for each other.
+pub(crate) struct RecordKey(SigningKey);
+
+impl RecordKey {
+    pub(crate) fn sign(&self, message: &Transcript) -> [u8; 64] {
+        self.0.sign(message.bytes()).to_bytes()
+    }
 }
 
 /// The Ed25519 private key that authenticates an account to the relay. Like
 /// [`RootSecret`] its bytes can't be read, and it is wiped when dropped.
 ///
-/// It also signs the key record and epoch links, so outside the crate it
-/// signs only relay requests, under their own label: no request the relay
-/// picks can come back as a record or link signature.
+/// It signs only relay requests, under their own label. Records and epoch
+/// links are signed by a separate key (`record-key`), so even a raw
+/// signature by this key could not pass as one.
 pub struct AuthKey(SigningKey);
 
 impl AuthKey {
@@ -137,7 +157,7 @@ impl AuthKey {
     }
 
     /// A signature of `request` (a login challenge, a request body) for the
-    /// relay: Ed25519 over `"srssly/v2/relay-auth"` then `request`, each
+    /// relay: Ed25519 over `"srssly/v3/relay-auth"` then `request`, each
     /// length-prefixed. Verify it with [`AuthPublicKey::verify_relay_request`].
     ///
     /// The label only stops a relay request from being reused as a record or
@@ -155,7 +175,7 @@ impl AuthKey {
 }
 
 fn relay_request_bytes(request: &[u8]) -> Transcript {
-    let mut t = Transcript::new(b"srssly/v2/relay-auth");
+    let mut t = Transcript::new(b"srssly/v3/relay-auth");
     t.field(request);
     t
 }
@@ -166,7 +186,8 @@ impl fmt::Debug for AuthKey {
     }
 }
 
-/// The Ed25519 public key that authenticates an account to the relay. Always
+/// An Ed25519 public key: the relay-authentication key, or the record key
+/// ([`DerivedKeys::record_public_key`]). Always
 /// a valid curve point: parsing rejects bytes that aren't one.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct AuthPublicKey(VerifyingKey);
@@ -267,6 +288,8 @@ pub(crate) mod tests {
         let b = root.derive(&account());
         assert_eq!(a.data_key.0, b.data_key.0);
         assert_eq!(a.auth_public_key(), b.auth_public_key());
+        assert_eq!(a.record_public_key(), b.record_public_key());
+        assert_ne!(a.auth_public_key(), a.record_public_key());
         assert_ne!(a.data_key.0, a.auth_key.0.to_bytes());
         assert_ne!(&a.data_key.0[..16], root.key_check(&account()).as_bytes());
         let other = AccountId::from_bytes([8; 16]);
@@ -347,7 +370,7 @@ pub(crate) mod tests {
         assert_hex(
             "relay_auth_signature",
             &sig,
-            "977c95df68278a8845fdf715ac6c49527119dabb99c6b9b19a78925b33b923cddfecb653fe6a2d37963acb912d9ab687694457ebbfad3c71b8187919c9ef8000",
+            "b7c2ef0b393ecc7eacd8830aeaf0be382b966cb6b6c9c7a130a92b7fe4503014d98a171d75182b3ea7b8e6f292320bfd3014b2de42784cb6bf9cfc2fc5e7a70a",
         );
     }
 
@@ -372,6 +395,11 @@ pub(crate) mod tests {
             "auth_public",
             &keys.auth_public_key().to_bytes(),
             "b73c2d802b74e5438e51c49cbab6873ba403e6a67ceea29abe902a4a72bd3172",
+        );
+        assert_hex(
+            "record_public",
+            &keys.record_public_key().to_bytes(),
+            "df17e1a5211dfd7f8f494db321d717cb2b30118c1ffa02f364553a991f2584c0",
         );
     }
 

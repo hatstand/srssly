@@ -324,6 +324,7 @@ fn summary(keys: &AccountKeys) -> Value {
         "epoch": keys.epoch,
         "key_check": B64.encode(keys.key_check.as_bytes()),
         "auth_public_key": B64.encode(keys.auth_public_key.to_bytes()),
+        "record_public_key": B64.encode(keys.record_public_key.to_bytes()),
         "passkeys": keys.passkeys.len(),
     })
 }

@@ -93,48 +93,55 @@ def transcript(label, *fields):
 
 
 def epoch_values(root):
-    seed = hkdf(salt, root, b"auth-key", 32)
-    return hkdf(salt, root, b"key-check", 16), seed
+    """Key check, auth key and record key for one epoch's root."""
+    key = lambda info: Ed25519PrivateKey.from_private_bytes(hkdf(salt, root, info, 32))
+    return hkdf(salt, root, b"key-check", 16), key(b"auth-key"), key(b"record-key")
 
 
-key_check0, seed0 = epoch_values(root)
-auth0 = Ed25519PrivateKey.from_private_bytes(seed0)
+key_check0, auth0, record0 = epoch_values(root)
+results["record_public"] = raw(record0.public_key())
 binding_key = hkdf(b"srssly/v1/passkey-kem", results["prf"], b"binding-mac", 32)
 results["binding"] = H(
     binding_key,
     transcript(
-        b"srssly/v2/binding",
+        b"srssly/v3/binding",
         acct,
         (0).to_bytes(4, "big"),
         key_check0,
         raw(auth0.public_key()),
+        raw(record0.public_key()),
         hashlib.sha256(b"cred").digest(),
         results["passkey_public"],
     ),
 )
-key_check1, seed1 = epoch_values(bytes(range(1, 33)))
-auth1_public = raw(Ed25519PrivateKey.from_private_bytes(seed1).public_key())
-results["link_signature"] = auth0.sign(
-    transcript(b"srssly/v2/link", acct, (1).to_bytes(4, "big"), key_check1, auth1_public)
+# Epoch links are signed by the previous epoch's record key, not its auth key.
+key_check1, auth1, record1 = epoch_values(bytes(range(1, 33)))
+results["link_signature"] = record0.sign(
+    transcript(
+        b"srssly/v3/link",
+        acct,
+        (1).to_bytes(4, "big"),
+        key_check1,
+        raw(auth1.public_key()),
+        raw(record1.public_key()),
+    )
 )
 
-# A relay request signature (keys.rs): the request under its own label, so it
-# can never equal a link or record transcript.
-results["relay_auth_signature"] = Ed25519PrivateKey.from_private_bytes(
-    hkdf(salt, root, b"auth-key", 32)
-).sign(transcript(b"srssly/v2/relay-auth", b"challenge"))
+# A relay request signature (keys.rs): by the auth key, under its own label.
+results["relay_auth_signature"] = auth0.sign(transcript(b"srssly/v3/relay-auth", b"challenge"))
 
 # The same values are pinned in the Rust tests.
 EXPECTED = {
     "key_check": "7d745637d079f47074bfa7e55b88b32e",
     "data_key": "cd83ad81a9fdd0261d66adc35de901016197cef3917079477a6153a7e1fd1678",
+    "record_public": "df17e1a5211dfd7f8f494db321d717cb2b30118c1ffa02f364553a991f2584c0",
     "auth_public": "b73c2d802b74e5438e51c49cbab6873ba403e6a67ceea29abe902a4a72bd3172",
     "prf": "0763ce60a3fe189c114c48cf3a5ef43bbe48429e10c6384a67de5ead8a96e1f9",
     "passkey_public": "3819b8a928132364538f0874ebacc1d03b551b8e2d1c3c0af8163d0209babd3e",
     "unwrapped_root": root.hex(),
-    "binding": "b2b55fb8363fee8da86bf171176e45d7442564ecb3f8f1a6d3dd263836e2f41e",
-    "link_signature": "22262c84fd317a1fed3c402194add22e402d09886751b98d25a6b38f632fac1d5d0b8cc08efbe06f124414040989a9f8c6af5220d32ff7b295d9cc08e4d00506",
-    "relay_auth_signature": "977c95df68278a8845fdf715ac6c49527119dabb99c6b9b19a78925b33b923cddfecb653fe6a2d37963acb912d9ab687694457ebbfad3c71b8187919c9ef8000",
+    "binding": "b0a1c7c129c5b92c2236d1cdc7c0b0d358e6be5df316dde7b65eaab0114d1fab",
+    "link_signature": "82b9ee112d049cd2de6c9b354a838ac9a0ad1db9be09a5f75ccec15f68961ed0103a873418d8369b795e6c041b3ae9be25560c6ce051fcefc825822f259b200e",
+    "relay_auth_signature": "b7c2ef0b393ecc7eacd8830aeaf0be382b966cb6b6c9c7a130a92b7fe4503014d98a171d75182b3ea7b8e6f292320bfd3014b2de42784cb6bf9cfc2fc5e7a70a",
     "ctap_salt": "09cfa2c104ea19b7a59f9472b2b6fd18194db1b560fa3bff1add23bfdd921a42",
 }
 
