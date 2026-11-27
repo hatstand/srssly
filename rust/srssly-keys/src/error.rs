@@ -37,6 +37,11 @@ pub enum Error {
     /// The record is older than one this device has already seen.
     #[error("the key record is older than one already seen")]
     Stale,
+    /// A change would take the record past one of its size limits (see
+    /// [`MAX_PASSKEYS`](crate::MAX_PASSKEYS) and the others). A record from
+    /// the relay that is already past them is `Malformed` instead.
+    #[error("limit reached: {0}")]
+    LimitReached(&'static str),
     /// A stored field has the wrong length or encoding.
     #[error("malformed {0}")]
     Malformed(&'static str),
@@ -57,6 +62,7 @@ impl Error {
             Error::Authenticator(_) => "authenticator",
             Error::Tampered => "tampered",
             Error::Stale => "stale",
+            Error::LimitReached(_) => "limit_reached",
             Error::Malformed(_) => "malformed",
         }
     }

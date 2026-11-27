@@ -116,6 +116,16 @@ fn binding_bytes(account: &AccountId, link: &EpochLink, p: &PasskeyInfo) -> Tran
     t
 }
 
+/// Limits on a key record, so one from the relay can't make a sign-in slow or
+/// memory-hungry. Records this crate makes always stay within them.
+pub const MAX_RECORD_BYTES: usize = 1 << 20;
+pub const MAX_PASSKEYS: usize = 32;
+pub const MAX_LABEL_BYTES: usize = 128;
+/// One link per rotation, so this is a lifetime cap: once an account has
+/// this many epochs, rotation is refused for good. Pruning the chain (a link
+/// signed by the current root that restarts it) is future work.
+pub const MAX_EPOCHS: usize = 1024;
+
 /// The key record the relay stores for an account. Everything in it is safe
 /// for the relay to see: public keys, a key check and sealed secrets.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -320,6 +330,12 @@ impl AccountKeys {
         if self.find(&credential_id_hash).is_some() {
             return Err(Error::DuplicatePasskey);
         }
+        if label.len() > MAX_LABEL_BYTES {
+            return Err(Error::LimitReached("label too long"));
+        }
+        if self.passkeys.len() >= MAX_PASSKEYS {
+            return Err(Error::LimitReached("too many passkeys"));
+        }
         let key_pair = PasskeyKeyPair::from_prf(prf);
         let wrapped = WrappedSecret::seal(
             root,
@@ -505,6 +521,9 @@ impl AccountKeys {
         if kept.is_empty() {
             return Err(Error::LastPasskey);
         }
+        if self.epochs.len() >= MAX_EPOCHS {
+            return Err(Error::LimitReached("too many epochs"));
+        }
         let root = RootSecret::generate();
         let epoch = self.epoch.checked_add(1).ok_or(Error::Malformed("epoch"))?;
         let mut next = Self::empty(self.account_id, epoch, &root);
@@ -547,6 +566,9 @@ impl AccountKeys {
 
     /// Parses a stored record, refusing versions this code doesn't know.
     pub fn from_json(json: &str) -> Result<Self> {
+        if json.len() > MAX_RECORD_BYTES {
+            return Err(Error::Malformed("record too large"));
+        }
         #[derive(Deserialize)]
         struct Version {
             version: u32,
@@ -562,9 +584,23 @@ impl AccountKeys {
         Ok(keys)
     }
 
-    /// Checks what serde can't: at least one passkey, no credential twice,
-    /// and every wrapped secret the length a sealed root secret has.
+    /// Checks what serde can't: the size limits, at least one passkey, no
+    /// credential twice, and every wrapped secret the length a sealed root
+    /// secret has. The limits go first, before the chain's signatures.
     fn validate(&self) -> Result<()> {
+        if self.epochs.len() > MAX_EPOCHS {
+            return Err(Error::Malformed("too many epochs"));
+        }
+        if self.passkeys.len() > MAX_PASSKEYS {
+            return Err(Error::Malformed("too many passkeys"));
+        }
+        if self
+            .passkeys
+            .iter()
+            .any(|p| p.label.len() > MAX_LABEL_BYTES)
+        {
+            return Err(Error::Malformed("label too long"));
+        }
         self.verify_chain()?;
         if self.passkeys.is_empty() {
             return Err(Error::Malformed("no passkeys"));
@@ -760,6 +796,57 @@ mod tests {
         let mut long = keys.clone();
         long.passkeys[0].wrapped.ciphertext.push(0);
         assert_eq!(parse(&long), Err(Error::Malformed("wrapped secret")));
+    }
+
+    /// Fresh review finding 6: records from the relay are bounded.
+    #[test]
+    fn size_limits() {
+        let root = RootSecret::generate();
+        let keys = record(&root);
+        let parse = |k: &AccountKeys| AccountKeys::from_json(&k.to_json());
+        let mut long = keys.clone();
+        long.passkeys[0].label = "x".repeat(MAX_LABEL_BYTES + 1);
+        assert_eq!(parse(&long), Err(Error::Malformed("label too long")));
+        let mut many = keys.clone();
+        many.passkeys = vec![keys.passkeys[0].clone(); MAX_PASSKEYS + 1];
+        assert_eq!(parse(&many), Err(Error::Malformed("too many passkeys")));
+        let mut epochs = keys.clone();
+        epochs.epochs = vec![keys.epochs[0].clone(); MAX_EPOCHS + 1];
+        assert_eq!(parse(&epochs), Err(Error::Malformed("too many epochs")));
+        let huge = " ".repeat(MAX_RECORD_BYTES + 1);
+        assert_eq!(
+            AccountKeys::from_json(&huge),
+            Err(Error::Malformed("record too large"))
+        );
+
+        // The crate never makes a record it would refuse.
+        let (mut keys, root) = AccountKeys::create(&SoftPasskey::generate(), "a").unwrap();
+        let too_long = "x".repeat(MAX_LABEL_BYTES + 1);
+        let pk = SoftPasskey::generate();
+        assert_eq!(
+            keys.add_passkey(&root, &pk, &too_long),
+            Err(Error::LimitReached("label too long"))
+        );
+        for _ in 1..MAX_PASSKEYS {
+            keys.add_passkey(
+                &root,
+                &SoftPasskey::generate(),
+                &"x".repeat(MAX_LABEL_BYTES),
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            keys.add_passkey(&root, &pk, "a"),
+            Err(Error::LimitReached("too many passkeys"))
+        );
+        parse(&keys).unwrap();
+        keys.passkeys.truncate(1);
+        keys.epochs = vec![keys.epochs[0].clone(); MAX_EPOCHS];
+        keys.sign(&root);
+        assert_eq!(
+            keys.rotate(&root),
+            Err(Error::LimitReached("too many epochs"))
+        );
     }
 
     #[test]
