@@ -10,7 +10,7 @@
 //! `{"error": "<code>", "message": "..."}` on stderr and exits with status 1.
 
 use std::fs;
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -23,6 +23,7 @@ use srssly_keys::{
     AccountId, AccountKeys, CredentialIdHash, Error, PRF_INPUT, PrfAuthenticator, PrfOutput,
     RecoveryKey, RootSecret, SoftPasskey,
 };
+use zeroize::Zeroizing;
 
 #[derive(Parser)]
 #[command(name = "srssly-keys", version, about)]
@@ -109,9 +110,10 @@ enum Command {
     Recover {
         #[arg(long)]
         account: PathBuf,
-        /// The 24 words, in one argument.
+        /// A file holding the 24 words, or `-` for stdin. Not an argument,
+        /// so the words stay out of the process list and shell history.
         #[arg(long)]
-        words: String,
+        words_file: PathBuf,
         #[arg(long)]
         device_out: Option<PathBuf>,
     },
@@ -147,14 +149,16 @@ enum PasskeyCommand {
 #[derive(Args)]
 struct PasskeyArgs {
     /// A software passkey file.
-    #[arg(long, required_unless_present = "prf", conflicts_with_all = ["credential_id", "prf"])]
+    #[arg(long, required_unless_present = "prf_file", conflicts_with_all = ["credential_id", "prf_file"])]
     passkey: Option<PathBuf>,
     /// Credential ID, base64url.
-    #[arg(long, requires = "prf", allow_hyphen_values = true)]
+    #[arg(long, requires = "prf_file", allow_hyphen_values = true)]
     credential_id: Option<String>,
-    /// PRF output for Srssly's PRF input, base64url (32 bytes).
-    #[arg(long, requires = "credential_id", allow_hyphen_values = true)]
-    prf: Option<String>,
+    /// A file holding the PRF output for Srssly's PRF input, base64url (32
+    /// bytes), or `-` for stdin. Not an argument, so the secret stays out of
+    /// the process list and shell history.
+    #[arg(long, requires = "credential_id")]
+    prf_file: Option<PathBuf>,
 }
 
 impl PasskeyArgs {
@@ -168,7 +172,8 @@ impl PasskeyArgs {
             self.credential_id.as_deref().unwrap_or_default(),
             "credential ID",
         )?;
-        let prf = decode(self.prf.as_deref().unwrap_or_default(), "PRF output")?;
+        let prf = read_secret(self.prf_file.as_deref().expect("clap requires it"))?;
+        let prf = decode(prf.trim(), "PRF output")?;
         let mut prf: [u8; 32] = prf
             .try_into()
             .map_err(|_| CliError::usage("PRF output must be 32 bytes"))?;
@@ -247,28 +252,48 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, CliError> {
     })
 }
 
-fn write(path: &Path, contents: &str) -> Result<(), CliError> {
-    fs::write(path, contents).map_err(|e| CliError::io(path, e))
+/// Reads a secret from a file, or from stdin for `-`, wiped after use.
+fn read_secret(path: &Path) -> Result<Zeroizing<String>, CliError> {
+    let mut s = Zeroizing::new(String::new());
+    if path == Path::new("-") {
+        std::io::stdin()
+            .read_to_string(&mut s)
+            .map_err(|e| CliError::io(path, e))?;
+    } else {
+        *s = read(path)?;
+    }
+    Ok(s)
+}
+
+/// Replaces `path` atomically: writes a temporary file beside it, syncs it
+/// and renames it over the old one, so a crash leaves the old file or the
+/// new one, never a truncated one. With `secret`, only the owner can read it.
+fn write_file(path: &Path, contents: &str, secret: bool) -> Result<(), CliError> {
+    let err = |e| CliError::io(path, e);
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(format!(".tmp-{}", std::process::id()));
+    let tmp = PathBuf::from(tmp);
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, if secret { 0o600 } else { 0o644 });
+    let mut file = options.open(&tmp).map_err(err)?;
+    let written = file
+        .write_all(contents.as_bytes())
+        .and_then(|()| file.sync_all())
+        .and_then(|()| fs::rename(&tmp, path));
+    if let Err(e) = written {
+        let _ = fs::remove_file(&tmp);
+        return Err(err(e));
+    }
+    Ok(())
 }
 
 /// Writes a file holding a secret (a device or passkey file), readable only
 /// by its owner.
 fn write_json(path: &Path, value: &impl Serialize) -> Result<(), CliError> {
-    let contents = serde_json::to_string_pretty(value).expect("serializable");
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    let mut file = options.open(path).map_err(|e| CliError::io(path, e))?;
-    // `mode` only applies to new files; tighten an existing one too.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        file.set_permissions(fs::Permissions::from_mode(0o600))
-            .map_err(|e| CliError::io(path, e))?;
-    }
-    file.write_all(contents.as_bytes())
-        .map_err(|e| CliError::io(path, e))
+    let contents = Zeroizing::new(serde_json::to_string_pretty(value).expect("serializable"));
+    write_file(path, &contents, true)
 }
 
 fn decode(s: &str, what: &str) -> Result<Vec<u8>, CliError> {
@@ -281,7 +306,7 @@ fn read_account(path: &Path) -> Result<AccountKeys, CliError> {
 }
 
 fn write_account(path: &Path, keys: &AccountKeys) -> Result<(), CliError> {
-    write(path, &keys.to_json())
+    write_file(path, &keys.to_json(), false)
 }
 
 fn summary(keys: &AccountKeys) -> Value {
@@ -413,10 +438,11 @@ fn run(cli: Cli) -> Result<Value, CliError> {
         }
         Command::Recover {
             account,
-            words,
+            words_file,
             device_out,
         } => {
             let keys = read_account(&account)?;
+            let words = read_secret(&words_file)?;
             let root = keys.unlock_with_recovery_key(&RecoveryKey::parse(&words)?)?;
             if let Some(path) = device_out {
                 write_json(&path, &Device::new(&keys, &root))?;

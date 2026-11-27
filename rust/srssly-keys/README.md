@@ -112,7 +112,7 @@ test-only symbols in the Linux and iOS libraries. Being a symbol check, it
 can't see code that was inlined away.
 Anything that can report a credential ID and PRF output (a browser, a
 platform passkey API) can also be used directly, through the `*_with_prf`
-functions or the CLI's `--credential-id`/`--prf` flags.
+functions or the CLI's `--credential-id`/`--prf-file` flags.
 
 Planned: YubiKeys over CTAP2 `hmac-secret`, and Touch ID / platform passkeys,
 for manual testing.
@@ -131,15 +131,18 @@ srssly-keys add-passkey --account acct.json --device dev.json --passkey b.json -
 srssly-keys list --account acct.json
 srssly-keys unlock --account acct.json --passkey b.json --device-out dev2.json
 srssly-keys recovery-key --device dev.json
-srssly-keys recover --account acct.json --words "…24 words…" --device-out dev3.json
+srssly-keys recover --account acct.json --words-file words.txt --device-out dev3.json
 srssly-keys rotate --account acct.json --device dev.json
 srssly-keys remove-passkey --account acct.json --device dev.json --passkey b.json
 srssly-keys verify --account acct.json --device dev.json
-# A real authenticator: pass what the browser's PRF extension returned.
-srssly-keys unlock --account acct.json --credential-id <base64url> --prf <base64url>
+# A real authenticator: pass what the browser's PRF extension returned. Secrets
+# come from a file or stdin (`-`), never an argument, to keep them out of the
+# process list and shell history.
+echo <base64url> | srssly-keys unlock --account acct.json --credential-id <base64url> --prf-file -
 ```
 
-`acct.json` is what the relay would store. `dev.json` stands in for a device's
+Files are replaced atomically (written beside the old one, then renamed),
+so a crash mid-`rotate` can't truncate one. `acct.json` is what the relay would store. `dev.json` stands in for a device's
 Keychain and holds the root secret in plain text, so it is for testing only.
 
 Error codes: `wrong_passkey`, `unknown_passkey`, `duplicate_passkey`,
