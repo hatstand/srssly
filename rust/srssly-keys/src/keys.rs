@@ -132,14 +132,18 @@ impl AuthKey {
     /// A signature of `request` (a login challenge, a request body) for the
     /// relay: Ed25519 over `"srssly/v2/relay-auth"` then `request`, each
     /// length-prefixed. Verify it with [`AuthPublicKey::verify_relay_request`].
+    ///
+    /// The label only stops a relay request from being reused as a record or
+    /// link signature. It doesn't stop replay: `request` should carry the
+    /// relay's fresh nonce and say what it authorises.
     pub fn sign_relay_request(&self, request: &[u8]) -> [u8; 64] {
-        self.sign(relay_request_bytes(request).bytes())
+        self.sign(&relay_request_bytes(request))
     }
 
-    /// A raw Ed25519 signature. Crate-private: callers must label what they
-    /// sign with a [`Transcript`] of their own.
-    pub(crate) fn sign(&self, message: &[u8]) -> [u8; 64] {
-        self.0.sign(message).to_bytes()
+    /// An Ed25519 signature of a labelled transcript. Crate-private, and it
+    /// takes a [`Transcript`] so nothing unlabelled is ever signed.
+    pub(crate) fn sign(&self, message: &Transcript) -> [u8; 64] {
+        self.0.sign(message.bytes()).to_bytes()
     }
 }
 
@@ -168,14 +172,14 @@ impl AuthPublicKey {
     /// Whether `signature` is this key's [`AuthKey::sign_relay_request`]
     /// signature of `request`.
     pub fn verify_relay_request(&self, request: &[u8], signature: &[u8; 64]) -> bool {
-        self.verify(relay_request_bytes(request).bytes(), signature)
+        self.verify(&relay_request_bytes(request), signature)
     }
 
     /// Whether `signature` is this key's Ed25519 signature of `message`
     /// (strict verification: no malleable or small-order signatures).
-    pub(crate) fn verify(&self, message: &[u8], signature: &[u8; 64]) -> bool {
+    pub(crate) fn verify(&self, message: &Transcript, signature: &[u8; 64]) -> bool {
         let signature = ed25519_dalek::Signature::from_bytes(signature);
-        self.0.verify_strict(message, &signature).is_ok()
+        self.0.verify_strict(message.bytes(), &signature).is_ok()
     }
 }
 
@@ -315,10 +319,13 @@ pub(crate) mod tests {
     #[test]
     fn auth_key_signs_for_its_public_key() {
         let keys = test_root(0).derive(&account());
-        let sig = ed25519_dalek::Signature::from_bytes(&keys.auth_key.sign(b"hi"));
+        let sig = keys.auth_key.sign(&Transcript::new(b"hi"));
+        let sig = ed25519_dalek::Signature::from_bytes(&sig);
         let public = VerifyingKey::from_bytes(&keys.auth_public_key().to_bytes()).unwrap();
-        public.verify_strict(b"hi", &sig).unwrap();
-        assert!(public.verify_strict(b"ho", &sig).is_err());
+        public
+            .verify_strict(Transcript::new(b"hi").bytes(), &sig)
+            .unwrap();
+        assert!(public.verify_strict(b"hi", &sig).is_err());
     }
 
     #[test]
@@ -329,7 +336,7 @@ pub(crate) mod tests {
         assert!(public.verify_relay_request(b"challenge", &sig));
         assert!(!public.verify_relay_request(b"challenge!", &sig));
         // Not a raw signature of the request: the label is part of it.
-        assert!(!public.verify(b"challenge", &sig));
+        assert!(!public.verify(&Transcript::new(b"challenge"), &sig));
         assert_hex(
             "relay_auth_signature",
             &sig,
