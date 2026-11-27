@@ -33,7 +33,9 @@ pub use account::{
     MAX_PASSKEYS, MAX_RECORD_BYTES, PasskeyInfo,
 };
 pub use error::{Error, Result};
-pub use keys::{AuthKey, AuthPublicKey, DataKey, DerivedKeys, KeyCheck, RootSecret};
+pub use keys::{
+    AuthKey, AuthPublicKey, DataKey, DerivedKeys, KeyCheck, RecordPublicKey, RootSecret,
+};
 #[cfg(any(test, feature = "soft-passkey"))]
 pub use passkey::SoftPasskey;
 pub use passkey::{
@@ -42,7 +44,7 @@ pub use passkey::{
 pub use recovery::RecoveryKey;
 pub use wrap::WrappedSecret;
 /// Format version of every serialized structure in this crate.
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 pub(crate) fn random_bytes<const N: usize>() -> [u8; N] {
     let mut out = [0u8; N];

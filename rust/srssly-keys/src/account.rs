@@ -2,7 +2,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::keys::{AuthPublicKey, KeyCheck, RootSecret};
+use crate::keys::{AuthPublicKey, KeyCheck, RecordPublicKey, RootSecret};
 use hmac::Mac as _;
 
 use crate::passkey::{
@@ -66,7 +66,7 @@ pub struct PasskeyInfo {
 }
 
 /// One epoch's public values. Every link after the first is signed by the
-/// previous epoch's auth key, so a device that trusts one epoch can follow
+/// previous epoch's record key, so a device that trusts one epoch can follow
 /// the rotations after it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -74,18 +74,20 @@ pub struct EpochLink {
     pub epoch: u32,
     pub key_check: KeyCheck,
     pub auth_public_key: AuthPublicKey,
-    /// Ed25519 by the previous epoch's auth key; empty for the first link.
+    pub record_public_key: RecordPublicKey,
+    /// Ed25519 by the previous epoch's record key; empty for the first link.
     #[serde(with = "b64")]
     pub signature: Vec<u8>,
 }
 
 impl EpochLink {
     fn signed_bytes(&self, account: &AccountId) -> Transcript {
-        let mut t = Transcript::new(b"srssly/v2/link");
+        let mut t = Transcript::new(b"srssly/v3/link");
         t.field(account.as_bytes())
             .field(&self.epoch.to_be_bytes())
             .field(self.key_check.as_bytes())
-            .field(&self.auth_public_key.to_bytes());
+            .field(&self.auth_public_key.to_bytes())
+            .field(&self.record_public_key.to_bytes());
         t
     }
 }
@@ -100,17 +102,19 @@ pub struct KnownEpoch {
     pub epoch: u32,
     pub key_check: KeyCheck,
     pub auth_public_key: AuthPublicKey,
+    pub record_public_key: RecordPublicKey,
     pub revision: u64,
 }
 
 /// What a passkey's binding covers: `link`'s values, the passkey's credential
 /// hash and its public key.
 fn binding_bytes(account: &AccountId, link: &EpochLink, p: &PasskeyInfo) -> Transcript {
-    let mut t = Transcript::new(b"srssly/v2/binding");
+    let mut t = Transcript::new(b"srssly/v3/binding");
     t.field(account.as_bytes())
         .field(&link.epoch.to_be_bytes())
         .field(link.key_check.as_bytes())
         .field(&link.auth_public_key.to_bytes())
+        .field(&link.record_public_key.to_bytes())
         .field(p.credential_id_hash.as_bytes())
         .field(&p.wrapped.public_key);
     t
@@ -142,10 +146,14 @@ pub struct AccountKeys {
     pub key_check: KeyCheck,
     /// The current Ed25519 relay-authentication public key.
     pub auth_public_key: AuthPublicKey,
+    /// The current Ed25519 key that signs this record and the next epoch
+    /// link. Separate from the auth key, so nothing the relay gets signed
+    /// at login can ever pass as a record or link signature.
+    pub record_public_key: RecordPublicKey,
     /// Every epoch from the first; the last is the current one.
     pub epochs: Vec<EpochLink>,
     pub passkeys: Vec<PasskeyInfo>,
-    /// Ed25519 signature of everything above by the current auth key, so only
+    /// Ed25519 signature of everything above by the current record key, so only
     /// holders of the root secret can change the record.
     #[serde(with = "b64")]
     pub signature: [u8; 64],
@@ -174,10 +182,12 @@ impl AccountKeys {
     }
 
     fn empty(account_id: AccountId, epoch: u32, root: &RootSecret) -> Self {
+        let derived = root.derive(&account_id);
         let link = EpochLink {
             epoch,
             key_check: root.key_check(&account_id),
-            auth_public_key: root.derive(&account_id).auth_public_key(),
+            auth_public_key: derived.auth_public_key(),
+            record_public_key: derived.record_public_key(),
             signature: Vec::new(),
         };
         Self {
@@ -187,6 +197,7 @@ impl AccountKeys {
             revision: 0,
             key_check: link.key_check,
             auth_public_key: link.auth_public_key,
+            record_public_key: link.record_public_key,
             epochs: vec![link],
             passkeys: Vec::new(),
             signature: [0; 64],
@@ -195,18 +206,20 @@ impl AccountKeys {
 
     /// The bytes the record signature covers: every field but the signature.
     fn signed_bytes(&self) -> Transcript {
-        let mut t = Transcript::new(b"srssly/v2/record");
+        let mut t = Transcript::new(b"srssly/v3/record");
         t.field(&self.version.to_be_bytes())
             .field(self.account_id.as_bytes())
             .field(&self.epoch.to_be_bytes())
             .field(&self.revision.to_be_bytes())
             .field(self.key_check.as_bytes())
             .field(&self.auth_public_key.to_bytes())
+            .field(&self.record_public_key.to_bytes())
             .field(&(self.epochs.len() as u32).to_be_bytes());
         for link in &self.epochs {
             t.field(&link.epoch.to_be_bytes())
                 .field(link.key_check.as_bytes())
                 .field(&link.auth_public_key.to_bytes())
+                .field(&link.record_public_key.to_bytes())
                 .field(&link.signature);
         }
         t.field(&(self.passkeys.len() as u32).to_be_bytes());
@@ -223,20 +236,25 @@ impl AccountKeys {
     }
 
     fn sign(&mut self, root: &RootSecret) {
-        let auth_key = root.derive(&self.account_id).auth_key;
-        self.signature = auth_key.sign(&self.signed_bytes());
+        let record_key = root.derive(&self.account_id).record_key;
+        self.signature = record_key.sign(&self.signed_bytes());
     }
 
     /// Checks that `root` is current and that the record is signed by the
-    /// auth key derived from it. The key comes from the root, not from the
+    /// record key derived from it. The keys come from the root, not from the
     /// record, so a relay can't substitute its own.
     fn verify_signed(&self, root: &RootSecret) -> Result<()> {
         self.check_key_check(root)?;
-        self.verify_signature_by(&root.derive(&self.account_id).auth_public_key())
+        let derived = root.derive(&self.account_id);
+        if derived.auth_public_key() != self.auth_public_key {
+            return Err(Error::Tampered);
+        }
+        self.verify_signature_by(&derived.record_public_key())
     }
 
-    fn verify_signature_by(&self, public: &AuthPublicKey) -> Result<()> {
-        if *public == self.auth_public_key && public.verify(&self.signed_bytes(), &self.signature) {
+    fn verify_signature_by(&self, public: &RecordPublicKey) -> Result<()> {
+        if *public == self.record_public_key && public.verify(&self.signed_bytes(), &self.signature)
+        {
             Ok(())
         } else {
             Err(Error::Tampered)
@@ -249,6 +267,7 @@ impl AccountKeys {
             epoch: self.epoch,
             key_check: self.key_check,
             auth_public_key: self.auth_public_key,
+            record_public_key: self.record_public_key,
             revision: self.revision,
         }
     }
@@ -272,17 +291,21 @@ impl AccountKeys {
         let link = self.epochs.iter().find(|l| l.epoch == known.epoch);
         match link {
             Some(l)
-                if (l.key_check, l.auth_public_key) == (known.key_check, known.auth_public_key) => {
-            }
+                if (l.key_check, l.auth_public_key, l.record_public_key)
+                    == (
+                        known.key_check,
+                        known.auth_public_key,
+                        known.record_public_key,
+                    ) => {}
             _ => return Err(Error::Tampered),
         }
-        self.verify_signature_by(&self.auth_public_key)?;
+        self.verify_signature_by(&self.record_public_key)?;
         Ok(self.known_epoch())
     }
 
     /// Checks the whole record with the current root secret: that `root` is
     /// current, that the epoch chain is intact and that the record is signed
-    /// by the auth key derived from `root`. Until this passes, nothing in a
+    /// by the record key derived from `root`. Until this passes, nothing in a
     /// fetched record (passkeys, labels, epochs, revision) is authenticated,
     /// so call it before showing or acting on one.
     ///
@@ -528,9 +551,9 @@ impl AccountKeys {
         let epoch = self.epoch.checked_add(1).ok_or(Error::Malformed("epoch"))?;
         let mut next = Self::empty(self.account_id, epoch, &root);
         next.revision = self.next_revision()?;
-        // The old auth key vouches for the new epoch, extending the chain.
+        // The old record key vouches for the new epoch, extending the chain.
         let mut link = next.epochs.pop().expect("a new record has one link");
-        let old_key = current.derive(&self.account_id).auth_key;
+        let old_key = current.derive(&self.account_id).record_key;
         link.signature = old_key.sign(&link.signed_bytes(&self.account_id)).to_vec();
         next.epochs = self.epochs.clone();
         next.epochs.push(link);
@@ -628,8 +651,17 @@ impl AccountKeys {
             .ok_or(Error::Malformed("epochs"))?;
         let last = self.epochs.last().expect("not empty");
         if !first.signature.is_empty()
-            || (last.epoch, last.key_check, last.auth_public_key)
-                != (self.epoch, self.key_check, self.auth_public_key)
+            || (
+                last.epoch,
+                last.key_check,
+                last.auth_public_key,
+                last.record_public_key,
+            ) != (
+                self.epoch,
+                self.key_check,
+                self.auth_public_key,
+                self.record_public_key,
+            )
         {
             return Err(Error::Malformed("epochs"));
         }
@@ -639,7 +671,7 @@ impl AccountKeys {
                 .map_err(|_| Error::Malformed("epoch signature"))?;
             let signed = link.signed_bytes(&self.account_id);
             if Some(link.epoch) != previous.epoch.checked_add(1)
-                || !previous.auth_public_key.verify(&signed, signature)
+                || !previous.record_public_key.verify(&signed, signature)
             {
                 return Err(Error::Tampered);
             }
@@ -767,10 +799,10 @@ mod tests {
     fn json_round_trip_and_version_check() {
         let keys = record(&RootSecret::generate());
         assert_eq!(AccountKeys::from_json(&keys.to_json()).unwrap(), keys);
-        let future = keys.to_json().replace("\"version\": 2", "\"version\": 3");
+        let future = keys.to_json().replace("\"version\": 3", "\"version\": 4");
         assert_eq!(
             AccountKeys::from_json(&future),
-            Err(Error::UnsupportedVersion(3))
+            Err(Error::UnsupportedVersion(4))
         );
         let extra = keys.to_json().replacen('{', "{\"extra\": 1,", 1);
         assert_eq!(
@@ -1129,19 +1161,27 @@ mod tests {
         let mut forged = real.clone();
         let mut link = AccountKeys::empty(real.account_id, 1, &relay_root).epochs[0].clone();
         let challenge = link.signed_bytes(&real.account_id);
-        let auth_key = root.derive(&real.account_id).auth_key;
+        let derived = root.derive(&real.account_id);
+        let auth_key = &derived.auth_key;
         link.signature = auth_key.sign_relay_request(challenge.bytes()).to_vec();
         forged.epoch = 1;
         forged.key_check = link.key_check;
         forged.auth_public_key = link.auth_public_key;
+        forged.record_public_key = link.record_public_key;
         forged.epochs.push(link);
         forged.sign(&relay_root);
         let parse = AccountKeys::from_json(&forged.to_json());
         assert_eq!(parse, Err(Error::Tampered));
-        // Positive control: with a raw signature of the same challenge (what
-        // a public raw sign() would have given) the forgery gets through.
+        // Since the keys are split, not even a raw auth key signature of the
+        // challenge passes as a link signature.
         let link = forged.epochs.last_mut().unwrap();
         link.signature = auth_key.sign(&challenge).to_vec();
+        let parse = AccountKeys::from_json(&forged.to_json());
+        assert_eq!(parse, Err(Error::Tampered));
+        // Positive control: a record key signature of the same link (which
+        // only a root holder can make) does let the forgery through.
+        let link = forged.epochs.last_mut().unwrap();
+        link.signature = derived.record_key.sign(&challenge).to_vec();
         let p = &real.passkeys[0];
         forged.passkeys[0].wrapped = WrappedSecret::seal(
             &relay_root,
@@ -1156,7 +1196,12 @@ mod tests {
         assert_eq!(forged.unlock(&a).unwrap(), relay_root);
         let record = real.signed_bytes();
         let signature = auth_key.sign_relay_request(record.bytes());
-        assert!(!real.auth_public_key.verify(&record, &signature));
+        assert!(!real.record_public_key.verify(&record, &signature));
+        assert!(
+            !real
+                .record_public_key
+                .verify(&record, &auth_key.sign(&record))
+        );
     }
 
     #[test]
@@ -1268,6 +1313,7 @@ mod tests {
             epoch,
             key_check: root.key_check(&account()),
             auth_public_key: root.derive(&account()).auth_public_key(),
+            record_public_key: root.derive(&account()).record_public_key(),
             signature: Vec::new(),
         };
         let pk = SoftPasskey::from_parts(b"cred".to_vec(), [9; 32]);
@@ -1290,14 +1336,14 @@ mod tests {
         assert_hex(
             "binding",
             &mac.into_bytes(),
-            "b2b55fb8363fee8da86bf171176e45d7442564ecb3f8f1a6d3dd263836e2f41e",
+            "b0a1c7c129c5b92c2236d1cdc7c0b0d358e6be5df316dde7b65eaab0114d1fab",
         );
         let next = link(&test_root(1), 1).signed_bytes(&account());
-        let signature = test_root(0).derive(&account()).auth_key.sign(&next);
+        let signature = test_root(0).derive(&account()).record_key.sign(&next);
         assert_hex(
             "link_signature",
             &signature,
-            "22262c84fd317a1fed3c402194add22e402d09886751b98d25a6b38f632fac1d5d0b8cc08efbe06f124414040989a9f8c6af5220d32ff7b295d9cc08e4d00506",
+            "82b9ee112d049cd2de6c9b354a838ac9a0ad1db9be09a5f75ccec15f68961ed0103a873418d8369b795e6c041b3ae9be25560c6ce051fcefc825822f259b200e",
         );
     }
 

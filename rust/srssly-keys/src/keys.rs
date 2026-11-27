@@ -77,6 +77,7 @@ impl RootSecret {
     /// The keys derived from this secret for `account`.
     pub fn derive(&self, account: &AccountId) -> DerivedKeys {
         let auth_seed = self.expand(account, b"auth-key");
+        let record_seed = self.expand(account, b"record-key");
         let mut data_key = DataKey([0; 32]);
         data_key
             .0
@@ -84,6 +85,7 @@ impl RootSecret {
         DerivedKeys {
             data_key,
             auth_key: AuthKey(SigningKey::from_bytes(&auth_seed)),
+            record_key: RecordKey(SigningKey::from_bytes(&record_seed)),
         }
     }
 }
@@ -114,6 +116,9 @@ pub struct DerivedKeys {
     pub data_key: DataKey,
     /// Ed25519 key that authenticates this account to the relay.
     pub auth_key: AuthKey,
+    /// Ed25519 key that signs the key record and epoch links. Crate-private:
+    /// nothing outside the crate can sign with it.
+    pub(crate) record_key: RecordKey,
 }
 
 impl DerivedKeys {
@@ -121,14 +126,29 @@ impl DerivedKeys {
     pub fn auth_public_key(&self) -> AuthPublicKey {
         self.auth_key.public_key()
     }
+
+    /// The key record and epoch links are signed by this key.
+    pub fn record_public_key(&self) -> RecordPublicKey {
+        RecordPublicKey(self.record_key.0.verifying_key())
+    }
+}
+
+/// The Ed25519 key that signs the key record and epoch links, derived
+/// separately from [`AuthKey`] so the two never sign for each other.
+pub(crate) struct RecordKey(SigningKey);
+
+impl RecordKey {
+    pub(crate) fn sign(&self, message: &Transcript) -> [u8; 64] {
+        self.0.sign(message.bytes()).to_bytes()
+    }
 }
 
 /// The Ed25519 private key that authenticates an account to the relay. Like
 /// [`RootSecret`] its bytes can't be read, and it is wiped when dropped.
 ///
-/// It also signs the key record and epoch links, so outside the crate it
-/// signs only relay requests, under their own label: no request the relay
-/// picks can come back as a record or link signature.
+/// It signs only relay requests, under their own label. Records and epoch
+/// links are signed by a separate key (`record-key`), so even a raw
+/// signature by this key could not pass as one.
 pub struct AuthKey(SigningKey);
 
 impl AuthKey {
@@ -137,7 +157,7 @@ impl AuthKey {
     }
 
     /// A signature of `request` (a login challenge, a request body) for the
-    /// relay: Ed25519 over `"srssly/v2/relay-auth"` then `request`, each
+    /// relay: Ed25519 over `"srssly/v3/relay-auth"` then `request`, each
     /// length-prefixed. Verify it with [`AuthPublicKey::verify_relay_request`].
     ///
     /// The label only stops a relay request from being reused as a record or
@@ -147,15 +167,21 @@ impl AuthKey {
         self.sign(&relay_request_bytes(request))
     }
 
-    /// An Ed25519 signature of a labelled transcript. Crate-private, and it
-    /// takes a [`Transcript`] so nothing unlabelled is ever signed.
+    /// For tests: shows that even a raw signature by this key never passes
+    /// as a record or link signature. Outside tests the only signing path is
+    /// [`sign_relay_request`](Self::sign_relay_request).
+    #[cfg(test)]
     pub(crate) fn sign(&self, message: &Transcript) -> [u8; 64] {
+        self.0.sign(message.bytes()).to_bytes()
+    }
+    #[cfg(not(test))]
+    fn sign(&self, message: &Transcript) -> [u8; 64] {
         self.0.sign(message.bytes()).to_bytes()
     }
 }
 
 fn relay_request_bytes(request: &[u8]) -> Transcript {
-    let mut t = Transcript::new(b"srssly/v2/relay-auth");
+    let mut t = Transcript::new(b"srssly/v3/relay-auth");
     t.field(request);
     t
 }
@@ -166,48 +192,65 @@ impl fmt::Debug for AuthKey {
     }
 }
 
-/// The Ed25519 public key that authenticates an account to the relay. Always
-/// a valid curve point: parsing rejects bytes that aren't one.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct AuthPublicKey(VerifyingKey);
+/// An Ed25519 public key newtype: always a valid curve point (parsing rejects
+/// bytes that aren't one), base64url in JSON, strict verification.
+macro_rules! public_key {
+    ($(#[$doc:meta])* $name:ident) => {
+        $(#[$doc])*
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        pub struct $name(VerifyingKey);
+
+        impl $name {
+            pub fn to_bytes(&self) -> [u8; 32] {
+                self.0.to_bytes()
+            }
+
+            /// Whether `signature` is this key's Ed25519 signature of
+            /// `message` (strict: no malleable or small-order signatures).
+            pub(crate) fn verify(&self, message: &Transcript, signature: &[u8; 64]) -> bool {
+                let signature = ed25519_dalek::Signature::from_bytes(signature);
+                self.0.verify_strict(message.bytes(), &signature).is_ok()
+            }
+        }
+
+        impl fmt::Debug for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "{}({})", stringify!($name), b64::encode(&self.to_bytes()))
+            }
+        }
+
+        impl Serialize for $name {
+            fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                b64::serialize(self.to_bytes(), s)
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+                let bytes: [u8; 32] = b64::deserialize(d)?;
+                VerifyingKey::from_bytes(&bytes)
+                    .map(Self)
+                    .map_err(|_| serde::de::Error::custom("not an Ed25519 public key"))
+            }
+        }
+    };
+}
+
+public_key!(
+    /// The Ed25519 public key that authenticates an account to the relay.
+    AuthPublicKey
+);
+public_key!(
+    /// The Ed25519 public key that signs the key record and epoch links. A
+    /// separate type from [`AuthPublicKey`], so the two can't be mixed up.
+    RecordPublicKey
+);
 
 impl AuthPublicKey {
-    pub fn to_bytes(&self) -> [u8; 32] {
-        self.0.to_bytes()
-    }
-
     /// Whether `signature` is this key's [`AuthKey::sign_relay_request`]
     /// signature of `request`.
     pub fn verify_relay_request(&self, request: &[u8], signature: &[u8; 64]) -> bool {
         self.verify(&relay_request_bytes(request), signature)
-    }
-
-    /// Whether `signature` is this key's Ed25519 signature of `message`
-    /// (strict verification: no malleable or small-order signatures).
-    pub(crate) fn verify(&self, message: &Transcript, signature: &[u8; 64]) -> bool {
-        let signature = ed25519_dalek::Signature::from_bytes(signature);
-        self.0.verify_strict(message.bytes(), &signature).is_ok()
-    }
-}
-
-impl fmt::Debug for AuthPublicKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "AuthPublicKey({})", b64::encode(&self.to_bytes()))
-    }
-}
-
-impl Serialize for AuthPublicKey {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        b64::serialize(self.to_bytes(), s)
-    }
-}
-
-impl<'de> Deserialize<'de> for AuthPublicKey {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let bytes: [u8; 32] = b64::deserialize(d)?;
-        VerifyingKey::from_bytes(&bytes)
-            .map(Self)
-            .map_err(|_| serde::de::Error::custom("not an Ed25519 public key"))
     }
 }
 
@@ -267,6 +310,11 @@ pub(crate) mod tests {
         let b = root.derive(&account());
         assert_eq!(a.data_key.0, b.data_key.0);
         assert_eq!(a.auth_public_key(), b.auth_public_key());
+        assert_eq!(a.record_public_key(), b.record_public_key());
+        assert_ne!(
+            a.auth_public_key().to_bytes(),
+            a.record_public_key().to_bytes()
+        );
         assert_ne!(a.data_key.0, a.auth_key.0.to_bytes());
         assert_ne!(&a.data_key.0[..16], root.key_check(&account()).as_bytes());
         let other = AccountId::from_bytes([8; 16]);
@@ -347,7 +395,7 @@ pub(crate) mod tests {
         assert_hex(
             "relay_auth_signature",
             &sig,
-            "977c95df68278a8845fdf715ac6c49527119dabb99c6b9b19a78925b33b923cddfecb653fe6a2d37963acb912d9ab687694457ebbfad3c71b8187919c9ef8000",
+            "b7c2ef0b393ecc7eacd8830aeaf0be382b966cb6b6c9c7a130a92b7fe4503014d98a171d75182b3ea7b8e6f292320bfd3014b2de42784cb6bf9cfc2fc5e7a70a",
         );
     }
 
@@ -372,6 +420,11 @@ pub(crate) mod tests {
             "auth_public",
             &keys.auth_public_key().to_bytes(),
             "b73c2d802b74e5438e51c49cbab6873ba403e6a67ceea29abe902a4a72bd3172",
+        );
+        assert_hex(
+            "record_public",
+            &keys.record_public_key().to_bytes(),
+            "df17e1a5211dfd7f8f494db321d717cb2b30118c1ffa02f364553a991f2584c0",
         );
     }
 

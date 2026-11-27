@@ -29,12 +29,12 @@ see: public keys, a key check and sealed secrets.
 | Passkey PRF | WebAuthn `prf` extension, input `srssly/v1/passkey-prf` (the same for every credential, so sign-in needs no username). |
 | Passkey key pair | X25519 via RFC 9180 `DeriveKeyPair` from `HKDF-SHA256(salt="srssly/v1/passkey-kem", ikm=PRF output, info="x25519")`. The public key is stored on the relay. |
 | Wrapped secret | The root secret sealed with HPKE base mode (DHKEM X25519, HKDF-SHA256, AES-256-GCM), `info="srssly/v1/root-wrap"`, associated data = `"srssly/v1/root-wrap/" ‖ account ID ‖ epoch (u32 BE) ‖ SHA-256(credential ID)`. One per passkey. |
-| Derived keys | `HKDF-SHA256(salt="srssly/v1/root/" ‖ account ID, ikm=root)`: `key-check` (16 bytes, public), `data-key` (AES-256-GCM for records), `auth-key` (Ed25519 seed for relay authentication). |
+| Derived keys | `HKDF-SHA256(salt="srssly/v1/root/" ‖ account ID, ikm=root)`: `key-check` (16 bytes, public), `data-key` (AES-256-GCM for records), `auth-key` (Ed25519 seed for relay authentication), `record-key` (Ed25519 seed that signs the key record and epoch links, kept apart from `auth-key` so a relay login can never yield a record or link signature). |
 | Recovery key | The root secret as 24 BIP39 English words. Optional. |
-| Relay request signature | Ed25519 by the auth key over `srssly/v2/relay-auth` ‖ request, length-prefixed. `AuthKey::sign_relay_request` is the only public way to sign, so a request the relay chooses can't come back as a record or link signature. |
-| Record signature | Ed25519 by the current auth key over every field of the record, each length-prefixed (u32 BE) after the label `srssly/v2/record`. |
-| Epoch link | One per epoch: key check and auth public key. Each after the first is signed by the previous epoch's auth key over `srssly/v2/link` ‖ account ‖ epoch ‖ key check ‖ auth public key. |
-| Passkey binding | `HMAC-SHA256(HKDF-SHA256(salt="srssly/v1/passkey-kem", ikm=PRF output, info="binding-mac"), "srssly/v2/binding" ‖ account ‖ epoch ‖ key check ‖ auth public key ‖ credential hash ‖ passkey public key)`, at the epoch the passkey was bound. |
+| Relay request signature | Ed25519 by the auth key over `srssly/v3/relay-auth` ‖ request, length-prefixed. `AuthKey::sign_relay_request` is the only public way to sign, and the record key can't be used outside the crate. |
+| Record signature | Ed25519 by the current record key over every field of the record, each length-prefixed (u32 BE) after the label `srssly/v3/record`. |
+| Epoch link | One per epoch: key check, auth public key and record public key. Each after the first is signed by the previous epoch's record key over `srssly/v3/link` ‖ account ‖ epoch ‖ key check ‖ auth public key ‖ record public key. |
+| Passkey binding | `HMAC-SHA256(HKDF-SHA256(salt="srssly/v1/passkey-kem", ikm=PRF output, info="binding-mac"), "srssly/v3/binding" ‖ account ‖ epoch ‖ key check ‖ auth public key ‖ record public key ‖ credential hash ‖ passkey public key)`, at the epoch the passkey was bound. |
 
 Because each passkey is represented by a public key, the root secret can be
 sealed to every passkey without asking each one again. That is what makes
@@ -62,9 +62,9 @@ these work:
 ## Why the relay can't forge the record
 
 The relay can rewrite the record it stores, so the record authenticates
-itself (format version 2):
+itself (format version 3):
 
-- **Changes need the root.** Every change is signed with the current auth
+- **Changes need the root.** Every change is signed with the current record
   key. `add_passkey`, `remove_passkey` and `rotate` check that signature
   with the key derived from the caller's root, so an entry the relay slips
   in never receives a rotated secret.
@@ -85,7 +85,7 @@ itself (format version 2):
   an old binding vouches for it.
 - **Devices that have seen the account check for forks.** `verify(&root)`
   and `verify_successor` return a `KnownEpoch` (public values: epoch, key
-  check, auth public key, revision). Store it beside the root, but only for a
+  check, auth and record public keys, revision). Store it beside the root, but only for a
   record the relay holds (one just fetched, or an upload it accepted): a
   local change it never got would make its record look stale. Before
   trusting a fetched record, and above all before unlocking with a passkey
