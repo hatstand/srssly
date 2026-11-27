@@ -8,9 +8,18 @@
 # Usage: scripts/check-app-lib.sh <lib.a>...
 set -euo pipefail
 pattern='SoftPasskey|RecoveryKey5words'
+# Xcode's nm can be on an older LLVM than rustc and then can't read Rust's
+# objects, so prefer the llvm-nm shipped with the Rust toolchain
+# (`rustup component add llvm-tools`), and let NM override both.
+if [ -z "${NM:-}" ]; then
+  NM=nm
+  host=$(rustc -vV 2>/dev/null | sed -n 's/^host: //p')
+  rust_nm="$(rustc --print sysroot 2>/dev/null)/lib/rustlib/$host/bin/llvm-nm"
+  [ -x "$rust_nm" ] && NM=$rust_nm
+fi
 for lib in "$@"; do
   # Not in a pipeline, so a failing nm fails the script.
-  symbols=$(nm "$lib")
+  symbols=$("$NM" "$lib")
   if [ -z "$symbols" ]; then
     echo "$lib: nm listed no symbols" >&2
     exit 1
