@@ -233,9 +233,7 @@ impl AccountKeys {
         }
     }
 
-    /// The values to remember after [`verify`](Self::verify) or an unlock
-    /// succeeds, for [`verify_successor`](Self::verify_successor) next time.
-    pub fn known_epoch(&self) -> KnownEpoch {
+    fn known_epoch(&self) -> KnownEpoch {
         KnownEpoch {
             account_id: self.account_id,
             epoch: self.epoch,
@@ -250,8 +248,10 @@ impl AccountKeys {
     /// that passes through `known`'s epoch with `known`'s keys, then signs the
     /// record. Needs no root, so a device whose root no longer matches (after
     /// another device rotated) can tell a real rotation from a fork made with
-    /// a rotated-away root. Call it before unlocking with a passkey again.
-    pub fn verify_successor(&self, known: &KnownEpoch) -> Result<()> {
+    /// a root older than `known`'s epoch. Call it before unlocking with a
+    /// passkey again. Returns this record's [`KnownEpoch`] (see
+    /// [`verify`](Self::verify) for when to store it).
+    pub fn verify_successor(&self, known: &KnownEpoch) -> Result<KnownEpoch> {
         if self.account_id != known.account_id {
             return Err(Error::Tampered);
         }
@@ -266,7 +266,8 @@ impl AccountKeys {
             }
             _ => return Err(Error::Tampered),
         }
-        self.verify_signature_by(&self.auth_public_key)
+        self.verify_signature_by(&self.auth_public_key)?;
+        Ok(self.known_epoch())
     }
 
     /// Checks the whole record with the current root secret: that `root` is
@@ -274,9 +275,16 @@ impl AccountKeys {
     /// by the auth key derived from `root`. Until this passes, nothing in a
     /// fetched record (passkeys, labels, epochs, revision) is authenticated,
     /// so call it before showing or acting on one.
-    pub fn verify(&self, root: &RootSecret) -> Result<()> {
+    ///
+    /// Returns the record's [`KnownEpoch`] for
+    /// [`verify_successor`](Self::verify_successor). Store it only for a
+    /// record the relay holds (one just fetched, or an upload it accepted):
+    /// a local change the relay never got has a higher revision than the
+    /// relay's record, which would then be refused as stale.
+    pub fn verify(&self, root: &RootSecret) -> Result<KnownEpoch> {
         self.verify_chain()?;
-        self.verify_signed(root)
+        self.verify_signed(root)?;
+        Ok(self.known_epoch())
     }
 
     /// Checks only that `root`'s key check matches the record's, which the
@@ -1026,7 +1034,7 @@ mod tests {
         let kept = keys.clone();
         let root = keys.rotate(&old_root).unwrap();
         keys.unlock_and_rebind(&a).unwrap();
-        let known = keys.known_epoch();
+        let known = keys.verify(&root).unwrap();
 
         let mut fork = kept;
         let fork_root = fork.rotate(&old_root).unwrap();
@@ -1039,16 +1047,14 @@ mod tests {
         assert_eq!(fork.unlock(&a).unwrap(), fork_root, "the attack works");
         assert_eq!(fork.verify_successor(&known), Err(Error::Tampered));
 
-        // Real changes after the known epoch pass, older records don't.
+        // Real changes after the known epoch pass; older records don't.
         let older = keys.clone();
         keys.add_passkey(&root, &SoftPasskey::generate(), "b")
             .unwrap();
         let root = keys.rotate(&root).unwrap();
-        keys.verify_successor(&known).unwrap();
-        keys.verify(&root).unwrap();
-        let mut stale = keys.known_epoch();
-        stale.revision += 1;
-        assert_eq!(keys.verify_successor(&stale), Err(Error::Stale));
+        assert_eq!(keys.verify_successor(&known), keys.verify(&root));
+        let newest = keys.verify(&root).unwrap();
+        assert_eq!(older.verify_successor(&newest), Err(Error::Stale));
         let mut other = known.clone();
         other.account_id = AccountId::from_bytes([1; 16]);
         assert_eq!(older.verify_successor(&other), Err(Error::Tampered));
@@ -1056,6 +1062,35 @@ mod tests {
         let mut renamed = keys.clone();
         renamed.passkeys[0].label = "relay".into();
         assert_eq!(renamed.verify_successor(&known), Err(Error::Tampered));
+    }
+
+    /// Rolling back to an earlier epoch is refused even if the relay raises
+    /// the revision it shows, since the record signature covers it.
+    #[test]
+    fn successor_check_refuses_a_rollback_to_an_earlier_epoch() {
+        let (mut keys, root) = AccountKeys::create(&SoftPasskey::generate(), "a").unwrap();
+        let mut old = keys.clone();
+        let root = keys.rotate(&root).unwrap();
+        let known = keys.verify(&root).unwrap();
+        assert_eq!(old.verify_successor(&known), Err(Error::Stale));
+        old.revision = known.revision;
+        assert_eq!(old.verify_successor(&known), Err(Error::Tampered));
+    }
+
+    /// Store a KnownEpoch only for a record the relay holds: one taken from a
+    /// local change whose upload failed locks the device out as stale.
+    #[test]
+    fn known_epoch_of_a_lost_upload_is_ahead_of_the_relay() {
+        let a = SoftPasskey::generate();
+        let (mut relay, root) = AccountKeys::create(&a, "a").unwrap();
+        let root = relay.rotate(&root).unwrap();
+        let fetched = relay.verify(&root).unwrap();
+        let mut local = relay.clone();
+        assert!(local.unlock_and_rebind(&a).unwrap().1);
+        let unsent = local.verify(&root).unwrap();
+        // The upload is lost; the relay still serves its record.
+        assert_eq!(relay.verify_successor(&unsent), Err(Error::Stale));
+        assert_eq!(relay.verify_successor(&fetched), Ok(fetched));
     }
 
     /// Pins the binding MAC and the link signature byte for byte; the same
