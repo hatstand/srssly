@@ -104,6 +104,7 @@ impl WrappedSecret {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PrfAuthenticator as _;
     use crate::passkey::tests::test_prf;
 
     fn setup() -> (RootSecret, PasskeyKeyPair, AccountId, CredentialIdHash) {
@@ -158,6 +159,41 @@ mod tests {
             Err(Error::DecryptionFailed)
         );
     }
+
+    /// A wrapped secret sealed once and pinned, so other implementations can
+    /// check they open it. `scripts/known_answers.py` opens the same bytes
+    /// with its own HPKE: root `test_root(0)`, account `[7; 16]`, epoch 0,
+    /// credential `"cred"`, sealed to the `SoftPasskey` with credRandom `[9; 32]`.
+    #[test]
+    fn known_wrapped_secret_opens() {
+        let prf = crate::SoftPasskey::from_parts(b"cred".to_vec(), [9; 32])
+            .evaluate_prf(crate::PRF_INPUT)
+            .unwrap();
+        let hex = |s: &str| -> Vec<u8> {
+            (0..s.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+                .collect()
+        };
+        let kp = PasskeyKeyPair::from_prf(&prf);
+        let w = WrappedSecret {
+            public_key: *kp.public_key(),
+            encapped_key: hex(KAT_ENC).try_into().unwrap(),
+            ciphertext: hex(KAT_CIPHERTEXT),
+        };
+        let root = w
+            .open(
+                &kp,
+                &crate::keys::tests::account(),
+                0,
+                &CredentialIdHash::of(b"cred"),
+            )
+            .unwrap();
+        assert_eq!(root, crate::keys::tests::test_root(0));
+    }
+
+    const KAT_ENC: &str = "e8f3de694a8a6baf4c8f79d68597e65ff59dcb94b3745d59b168f1dca8058945";
+    const KAT_CIPHERTEXT: &str = "8f8c21b665f61dd66c8a9be940cc1725be895afb1396bcdbef7180b46bd501a1032294190c7c185aa8d17468ed94e81d";
 
     #[test]
     fn tampering_is_detected() {
