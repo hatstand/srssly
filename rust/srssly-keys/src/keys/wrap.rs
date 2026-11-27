@@ -38,6 +38,9 @@ fn aad(account: &AccountId, epoch: u32, credential: &CredentialIdHash) -> Vec<u8
 }
 
 impl WrappedSecret {
+    /// A sealed 32-byte root secret plus the 16-byte AES-GCM tag.
+    pub const CIPHERTEXT_LEN: usize = 32 + 16;
+
     /// Seals `root` to the passkey whose public key is `public_key`.
     pub fn seal(
         root: &RootSecret,
@@ -116,6 +119,7 @@ mod tests {
     fn seal_then_open() {
         let (root, kp, account, cred) = setup();
         let w = WrappedSecret::seal(&root, kp.public_key(), &account, 0, &cred).unwrap();
+        assert_eq!(w.ciphertext.len(), WrappedSecret::CIPHERTEXT_LEN);
         assert_eq!(w.open(&kp, &account, 0, &cred).unwrap(), root);
         assert!(!w.ciphertext.windows(32).any(|c| c == root.as_bytes()));
     }
