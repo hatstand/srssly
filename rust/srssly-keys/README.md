@@ -58,6 +58,10 @@ itself (format version 2):
   key. `add_passkey`, `remove_passkey` and `rotate` check that signature
   with the key derived from the caller's root, so an entry the relay slips
   in never receives a rotated secret.
+- **Reading needs the root too.** A fetched record is unauthenticated
+  until `AccountKeys::verify(&root)` passes (key check, record signature,
+  epoch chain); check it before showing passkeys or trusting the revision.
+  `srssly-keys list` verifies only when given `--device`.
 - **A new device trusts its passkey, not the relay.** Anyone can seal a
   secret to a stored public key, so unlocking first checks the passkey's
   binding, which only that passkey's PRF can make. The binding vouches for
