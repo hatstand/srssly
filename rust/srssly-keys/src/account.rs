@@ -2,7 +2,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::keys::{AuthPublicKey, KeyCheck, RootSecret};
+use crate::keys::{AuthPublicKey, KeyCheck, RecordPublicKey, RootSecret};
 use hmac::Mac as _;
 
 use crate::passkey::{
@@ -74,7 +74,7 @@ pub struct EpochLink {
     pub epoch: u32,
     pub key_check: KeyCheck,
     pub auth_public_key: AuthPublicKey,
-    pub record_public_key: AuthPublicKey,
+    pub record_public_key: RecordPublicKey,
     /// Ed25519 by the previous epoch's record key; empty for the first link.
     #[serde(with = "b64")]
     pub signature: Vec<u8>,
@@ -102,7 +102,7 @@ pub struct KnownEpoch {
     pub epoch: u32,
     pub key_check: KeyCheck,
     pub auth_public_key: AuthPublicKey,
-    pub record_public_key: AuthPublicKey,
+    pub record_public_key: RecordPublicKey,
     pub revision: u64,
 }
 
@@ -149,7 +149,7 @@ pub struct AccountKeys {
     /// The current Ed25519 key that signs this record and the next epoch
     /// link. Separate from the auth key, so nothing the relay gets signed
     /// at login can ever pass as a record or link signature.
-    pub record_public_key: AuthPublicKey,
+    pub record_public_key: RecordPublicKey,
     /// Every epoch from the first; the last is the current one.
     pub epochs: Vec<EpochLink>,
     pub passkeys: Vec<PasskeyInfo>,
@@ -252,7 +252,7 @@ impl AccountKeys {
         self.verify_signature_by(&derived.record_public_key())
     }
 
-    fn verify_signature_by(&self, public: &AuthPublicKey) -> Result<()> {
+    fn verify_signature_by(&self, public: &RecordPublicKey) -> Result<()> {
         if *public == self.record_public_key && public.verify(&self.signed_bytes(), &self.signature)
         {
             Ok(())

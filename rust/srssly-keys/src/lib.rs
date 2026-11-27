@@ -33,7 +33,9 @@ pub use account::{
     MAX_PASSKEYS, MAX_RECORD_BYTES, PasskeyInfo,
 };
 pub use error::{Error, Result};
-pub use keys::{AuthKey, AuthPublicKey, DataKey, DerivedKeys, KeyCheck, RootSecret};
+pub use keys::{
+    AuthKey, AuthPublicKey, DataKey, DerivedKeys, KeyCheck, RecordPublicKey, RootSecret,
+};
 #[cfg(any(test, feature = "soft-passkey"))]
 pub use passkey::SoftPasskey;
 pub use passkey::{
