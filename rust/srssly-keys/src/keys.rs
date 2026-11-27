@@ -7,6 +7,7 @@ use sha2::Sha256;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::account::AccountId;
+use crate::transcript::Transcript;
 use crate::{b64, random_bytes};
 
 // Children of this module can read the root secret's bytes; nothing else can.
@@ -115,9 +116,12 @@ impl DerivedKeys {
     }
 }
 
-/// The Ed25519 private key that authenticates an account to the relay. It
-/// can sign, but like [`RootSecret`] its bytes can't be read, and it is wiped
-/// when dropped.
+/// The Ed25519 private key that authenticates an account to the relay. Like
+/// [`RootSecret`] its bytes can't be read, and it is wiped when dropped.
+///
+/// It also signs the key record and epoch links, so outside the crate it
+/// signs only relay requests, under their own label: no request the relay
+/// picks can come back as a record or link signature.
 pub struct AuthKey(SigningKey);
 
 impl AuthKey {
@@ -125,10 +129,24 @@ impl AuthKey {
         AuthPublicKey(self.0.verifying_key())
     }
 
-    /// An Ed25519 signature of `message`.
-    pub fn sign(&self, message: &[u8]) -> [u8; 64] {
+    /// A signature of `request` (a login challenge, a request body) for the
+    /// relay: Ed25519 over `"srssly/v2/relay-auth"` then `request`, each
+    /// length-prefixed. Verify it with [`AuthPublicKey::verify_relay_request`].
+    pub fn sign_relay_request(&self, request: &[u8]) -> [u8; 64] {
+        self.sign(relay_request_bytes(request).bytes())
+    }
+
+    /// A raw Ed25519 signature. Crate-private: callers must label what they
+    /// sign with a [`Transcript`] of their own.
+    pub(crate) fn sign(&self, message: &[u8]) -> [u8; 64] {
         self.0.sign(message).to_bytes()
     }
+}
+
+fn relay_request_bytes(request: &[u8]) -> Transcript {
+    let mut t = Transcript::new(b"srssly/v2/relay-auth");
+    t.field(request);
+    t
 }
 
 impl fmt::Debug for AuthKey {
@@ -147,9 +165,15 @@ impl AuthPublicKey {
         self.0.to_bytes()
     }
 
+    /// Whether `signature` is this key's [`AuthKey::sign_relay_request`]
+    /// signature of `request`.
+    pub fn verify_relay_request(&self, request: &[u8], signature: &[u8; 64]) -> bool {
+        self.verify(relay_request_bytes(request).bytes(), signature)
+    }
+
     /// Whether `signature` is this key's Ed25519 signature of `message`
     /// (strict verification: no malleable or small-order signatures).
-    pub fn verify(&self, message: &[u8], signature: &[u8; 64]) -> bool {
+    pub(crate) fn verify(&self, message: &[u8], signature: &[u8; 64]) -> bool {
         let signature = ed25519_dalek::Signature::from_bytes(signature);
         self.0.verify_strict(message, &signature).is_ok()
     }
@@ -295,6 +319,22 @@ pub(crate) mod tests {
         let public = VerifyingKey::from_bytes(&keys.auth_public_key().to_bytes()).unwrap();
         public.verify_strict(b"hi", &sig).unwrap();
         assert!(public.verify_strict(b"ho", &sig).is_err());
+    }
+
+    #[test]
+    fn relay_request_signatures_are_labelled() {
+        let keys = test_root(0).derive(&account());
+        let public = keys.auth_public_key();
+        let sig = keys.auth_key.sign_relay_request(b"challenge");
+        assert!(public.verify_relay_request(b"challenge", &sig));
+        assert!(!public.verify_relay_request(b"challenge!", &sig));
+        // Not a raw signature of the request: the label is part of it.
+        assert!(!public.verify(b"challenge", &sig));
+        assert_hex(
+            "relay_auth_signature",
+            &sig,
+            "977c95df68278a8845fdf715ac6c49527119dabb99c6b9b19a78925b33b923cddfecb653fe6a2d37963acb912d9ab687694457ebbfad3c71b8187919c9ef8000",
+        );
     }
 
     /// Pins the derivation so other implementations (Swift, Kotlin, web) can

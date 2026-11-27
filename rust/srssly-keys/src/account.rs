@@ -875,6 +875,31 @@ mod tests {
         assert_eq!(forged.unlock(&a), Err(Error::Tampered));
     }
 
+    /// Fresh review finding 1: a relay login challenge that is byte for byte
+    /// a link (or record) transcript must not yield a signature that verifies
+    /// as one.
+    #[test]
+    fn relay_request_signature_is_not_a_link_signature() {
+        let a = SoftPasskey::generate();
+        let (real, root) = AccountKeys::create(&a, "a").unwrap();
+        let relay_root = RootSecret::generate();
+        let mut forged = real.clone();
+        let mut link = AccountKeys::empty(real.account_id, 1, &relay_root).epochs[0].clone();
+        let challenge = link.signed_bytes(&real.account_id);
+        let auth_key = root.derive(&real.account_id).auth_key;
+        link.signature = auth_key.sign_relay_request(challenge.bytes()).to_vec();
+        forged.epoch = 1;
+        forged.key_check = link.key_check;
+        forged.auth_public_key = link.auth_public_key;
+        forged.epochs.push(link);
+        forged.sign(&relay_root);
+        let parse = AccountKeys::from_json(&forged.to_json());
+        assert_eq!(parse, Err(Error::Tampered));
+        let record = real.signed_bytes();
+        let signature = auth_key.sign_relay_request(record.bytes());
+        assert!(!real.auth_public_key.verify(record.bytes(), &signature));
+    }
+
     #[test]
     fn bindings_from_older_epochs_still_unlock() {
         let a = SoftPasskey::generate();

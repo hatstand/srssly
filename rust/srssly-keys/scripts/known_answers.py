@@ -118,6 +118,12 @@ results["link_signature"] = auth0.sign(
     transcript(b"srssly/v2/link", acct, (1).to_bytes(4, "big"), key_check1, auth1_public)
 )
 
+# A relay request signature (keys.rs): the request under its own label, so it
+# can never equal a link or record transcript.
+results["relay_auth_signature"] = Ed25519PrivateKey.from_private_bytes(
+    hkdf(salt, root, b"auth-key", 32)
+).sign(transcript(b"srssly/v2/relay-auth", b"challenge"))
+
 # The same values are pinned in the Rust tests.
 EXPECTED = {
     "key_check": "7d745637d079f47074bfa7e55b88b32e",
@@ -128,6 +134,7 @@ EXPECTED = {
     "unwrapped_root": root.hex(),
     "binding": "b2b55fb8363fee8da86bf171176e45d7442564ecb3f8f1a6d3dd263836e2f41e",
     "link_signature": "22262c84fd317a1fed3c402194add22e402d09886751b98d25a6b38f632fac1d5d0b8cc08efbe06f124414040989a9f8c6af5220d32ff7b295d9cc08e4d00506",
+    "relay_auth_signature": "977c95df68278a8845fdf715ac6c49527119dabb99c6b9b19a78925b33b923cddfecb653fe6a2d37963acb912d9ab687694457ebbfad3c71b8187919c9ef8000",
     "ctap_salt": "09cfa2c104ea19b7a59f9472b2b6fd18194db1b560fa3bff1add23bfdd921a42",
 }
 
