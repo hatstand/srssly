@@ -8,7 +8,7 @@ A fast, local-first RSS reader for iOS.
 
 ## Building
 
-Requires Xcode 26 and [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`).
+Requires Xcode 26, [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`) and [rustup](https://rustup.rs). `make project` builds the Rust key core into `Packages/SrsslyKeys` with `scripts/build-rust-ios.sh` before generating the project.
 
 ```sh
 make open        # generate Srssly.xcodeproj and open it
@@ -45,7 +45,7 @@ Articles join to their state by `ArticleKey`, derived from the subscription's sy
 ## CI
 
 - **GitHub Actions** (`.github/workflows/ci.yml`) runs on every pull request: package tests and app tests on a simulator.
-- **Xcode Cloud** builds for TestFlight and the App Store. `ci_scripts/ci_post_clone.sh` sets the build number to Xcode Cloud's and generates the Xcode project, since it isn't committed. `ci_scripts/ci_post_xcodebuild.sh` writes TestFlight's "What to Test" notes from recent merges.
+- **Xcode Cloud** builds for TestFlight and the App Store. `ci_scripts/ci_post_clone.sh` sets the build number to Xcode Cloud's, installs Rust and builds the key core, and generates the Xcode project, since it isn't committed. `ci_scripts/ci_post_xcodebuild.sh` writes TestFlight's "What to Test" notes from recent merges.
 
 ## Layout
 

@@ -15,6 +15,14 @@ if [ -n "${CI_BUILD_NUMBER:-}" ]; then
     grep -q "CURRENT_PROJECT_VERSION: \"$CI_BUILD_NUMBER\"" project.yml
 fi
 
+# The Rust key core (Packages/SrsslyKeys) is built from source. Xcode Cloud
+# has no Rust, so install a minimal toolchain first.
+if ! command -v rustup >/dev/null; then
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+    . "$HOME/.cargo/env"
+fi
+./scripts/build-rust-ios.sh
+
 xcodegen generate
 
 # Xcode Cloud builds with automatic package resolution off, so it needs a
