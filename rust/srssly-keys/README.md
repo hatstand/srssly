@@ -31,6 +31,7 @@ see: public keys, a key check and sealed secrets.
 | Wrapped secret | The root secret sealed with HPKE base mode (DHKEM X25519, HKDF-SHA256, AES-256-GCM), `info="srssly/v1/root-wrap"`, associated data = `"srssly/v1/root-wrap/" ‖ account ID ‖ epoch (u32 BE) ‖ SHA-256(credential ID)`. One per passkey. |
 | Derived keys | `HKDF-SHA256(salt="srssly/v1/root/" ‖ account ID, ikm=root)`: `key-check` (16 bytes, public), `data-key` (AES-256-GCM for records), `auth-key` (Ed25519 seed for relay authentication). |
 | Recovery key | The root secret as 24 BIP39 English words. Optional. |
+| Relay request signature | Ed25519 by the auth key over `srssly/v2/relay-auth` ‖ request, length-prefixed. `AuthKey::sign_relay_request` is the only public way to sign, so a request the relay chooses can't come back as a record or link signature. |
 | Record signature | Ed25519 by the current auth key over every field of the record, each length-prefixed (u32 BE) after the label `srssly/v2/record`. |
 | Epoch link | One per epoch: key check and auth public key. Each after the first is signed by the previous epoch's auth key over `srssly/v2/link` ‖ account ‖ epoch ‖ key check ‖ auth public key. |
 | Passkey binding | `HMAC-SHA256(HKDF-SHA256(salt="srssly/v1/passkey-kem", ikm=PRF output, info="binding-mac"), "srssly/v2/binding" ‖ account ‖ epoch ‖ key check ‖ auth public key ‖ credential hash ‖ passkey public key)`, at the epoch the passkey was bound. |
