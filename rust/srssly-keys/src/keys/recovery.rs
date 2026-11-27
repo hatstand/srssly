@@ -20,13 +20,21 @@ impl RecoveryKey {
     /// Rejects phrases whose secret is obviously not random, such as
     /// "abandon abandon ... art".
     pub fn parse(words: &str) -> Result<Self> {
-        // Built in place, sized up front, so no stray copy of the phrase is left.
+        // Any Unicode whitespace separates words (a pasted phrase can carry
+        // non-breaking spaces), but BIP39 English words are ASCII. Refusing
+        // other words means lowercasing can't lengthen one, so the buffer
+        // sized up front never reallocates and leaves no stray copy.
         let mut normalized = Zeroizing::new(String::with_capacity(words.len()));
         for word in words.split_whitespace() {
+            if !word.is_ascii() {
+                return Err(Error::InvalidRecoveryKey(
+                    "not an English BIP39 phrase".into(),
+                ));
+            }
             if !normalized.is_empty() {
                 normalized.push(' ');
             }
-            normalized.extend(word.chars().flat_map(char::to_lowercase));
+            normalized.extend(word.chars().map(|c| c.to_ascii_lowercase()));
         }
         let m = Mnemonic::parse(normalized.as_str())
             .map_err(|e| Error::InvalidRecoveryKey(e.to_string()))?;
@@ -94,7 +102,7 @@ mod tests {
         let words = RecoveryKey::from_root(&root)
             .words()
             .to_uppercase()
-            .replace(' ', "  \n");
+            .replace(' ', " \u{00a0}\n");
         assert_eq!(RecoveryKey::parse(&words).unwrap().root_secret(), root);
     }
 
@@ -107,6 +115,16 @@ mod tests {
         let twelve = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
         assert!(matches!(
             RecoveryKey::parse(twelve),
+            Err(Error::InvalidRecoveryKey(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_non_ascii_phrases() {
+        let words = RecoveryKey::from_root(&test_root(0)).words();
+        let fancy = words.replacen('a', "\u{0130}", 1);
+        assert!(matches!(
+            RecoveryKey::parse(&fancy),
             Err(Error::InvalidRecoveryKey(_))
         ));
     }
