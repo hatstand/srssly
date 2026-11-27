@@ -2,10 +2,10 @@ name: Rust
 
 on:
   pull_request:
-    paths: ["rust/**", "rust-toolchain.toml", ".github/workflows/rust.yml"]
+    paths: ["rust/**", "rust-toolchain.toml", ".github/workflows/rust.yml", "scripts/check-app-lib.sh"]
   push:
     branches: [main]
-    paths: ["rust/**", "rust-toolchain.toml", ".github/workflows/rust.yml"]
+    paths: ["rust/**", "rust-toolchain.toml", ".github/workflows/rust.yml", "scripts/check-app-lib.sh"]
 
 concurrency:
   group: rust-${{ github.ref }}
